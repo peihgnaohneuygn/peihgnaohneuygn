@@ -6,26 +6,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Cài đặt Dependencies
+      - name: Setup Theos
+        uses: Randomblock1/theos-action@v1
+        
+      - name: Download SDK
         run: |
-          sudo apt-get update
-          sudo apt-get install -y git make clang libssl-dev libplist-dev xz-utils curl fakeroot zip unzip
-          
-          # Tải ldid phiên bản dành cho Linux
-          curl -sLO https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_linux_x86_64
-          chmod +x ldid_linux_x86_64
-          sudo mv ldid_linux_x86_64 /usr/local/bin/ldid
-          
-      - name: Tải Theos
-        run: |
-          export THEOS=$HOME/theos
-          git clone --recursive https://github.com/theos/theos.git $THEOS
-          echo "THEOS=$THEOS" >> $GITHUB_ENV
-          
-      - name: Tải iOS SDK
-        run: |
-          rm -rf $THEOS/sdks
-          git clone --depth 1 https://github.com/theos/sdks.git $THEOS/sdks
+          mkdir -p $THEOS/sdks
+          curl -L -o sdk.zip "https://github.com/xybp888/iOS-SDKs/raw/master/iPhoneOS14.5.sdk.zip"
+          unzip -q sdk.zip -d $THEOS/sdks/
+          rm sdk.zip
           
       - name: Create Build Files
         run: |
@@ -172,6 +161,12 @@ jobs:
           @property (nonatomic, strong) NSArray *tabButtons;
           @property (nonatomic, strong) UIView *contentView;
           @property (nonatomic, strong) NSMutableArray *functionButtons;
+          - (void)setupUI;
+          - (void)tabTapped:(UIButton *)sender;
+          - (void)renderTab:(NSInteger)index;
+          - (void)funcTapped:(UIButton *)sender;
+          - (void)showAlert:(NSString *)title msg:(NSString *)msg;
+          - (void)closeTapped;
           @end
 
           @implementation VladMenuView
@@ -336,6 +331,8 @@ jobs:
           // LOGO NÚT NỔI
           // ==========================================
           @interface VladLogoView : UIView
+          - (void)logoTapped;
+          - (void)logoPanned:(UIPanGestureRecognizer *)pan;
           @end
           @implementation VladLogoView
           - (instancetype)initWithFrame:(CGRect)frame {
@@ -375,7 +372,7 @@ jobs:
           @end
 
           // ==========================================
-          // LOGIC XỬ LÝ ẢNH (BỌC TRY/CATCH CHỐNG CRASH)
+          // LOGIC XỬ LÝ ẢNH
           // ==========================================
           %hook PHPickerViewController
           - (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
