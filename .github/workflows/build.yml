@@ -6,34 +6,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Tạo RAM ảo (Chống tràn RAM)
+      - name: Tạo RAM ảo
         run: |
           sudo fallocate -l 4G /swapfile
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
 
-      - name: Cài đặt Dependencies
+      - name: Cài Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git make clang libssl-dev libplist-dev xz-utils curl fakeroot zip unzip wget dpkg
+          sudo apt-get install -y git git-lfs make clang libssl-dev libplist-dev xz-utils curl fakeroot zip unzip wget dpkg
+          git lfs install
 
-          # Fake ldid — bỏ qua bước ký
           printf '#!/bin/sh\nexit 0\n' | sudo tee /usr/local/bin/ldid > /dev/null
           sudo chmod +x /usr/local/bin/ldid
 
-      - name: Setup Theos & SDK
+      - name: Setup Theos
         run: |
           export THEOS=$HOME/theos
           git clone --depth 1 https://github.com/theos/theos.git $THEOS
           echo "THEOS=$THEOS" >> $GITHUB_ENV
 
+      - name: Tải SDK (dùng git LFS — KHÔNG curl)
+        run: |
           mkdir -p $THEOS/sdks
-          curl -L -o sdk.zip "https://github.com/theos/sdks/raw/master/iPhoneOS14.5.sdk.zip"
-          unzip -q sdk.zip -d $THEOS/sdks/
-          rm sdk.zip
+          git clone --depth 1 https://github.com/theos/sdks.git /tmp/sdks
+          cd /tmp/sdks && git lfs pull
+          ls -la /tmp/sdks/*.sdk.zip | head -5
 
-      - name: Create Build Files
+          cp /tmp/sdks/iPhoneOS14.5.sdk.zip $THEOS/sdks/
+          cd $THEOS/sdks && unzip -q iPhoneOS14.5.sdk.zip && rm iPhoneOS14.5.sdk.zip
+
+          echo "=== SDK đã cài ==="
+          ls -la $THEOS/sdks/
+
+      - name: Tạo Build Files
         run: |
           cat << 'EOF' > Makefile
           ARCHS = arm64
@@ -57,7 +65,7 @@ jobs:
           Section: Tweaks
           EOF
 
-          cat << 'EOF' > Tweak.xm
+          cat << 'TWEAKEOF' > Tweak.xm
           #import <UIKit/UIKit.h>
           #import <AVFoundation/AVFoundation.h>
           #import <Photos/Photos.h>
@@ -68,6 +76,11 @@ jobs:
           static UIImage *gLastQRImage = nil;
           static UIWindow *gOverlayWindow = nil;
           static UIViewController *gCurrentEditor = nil;
+          static NSURL *gCurrentAudioURL = nil;
+          static AVPlayer *gCurrentPlayer = nil;
+          static NSArray<NSNumber *> *gDetectedBeats = nil;
+          static double gDetectedBPM = 0;
+          static id gTimeObserver = nil;
 
           static void searchImageViews(UIView *parent, NSMutableArray *array);
           static void autoFillSmart(UIViewController *editor);
@@ -158,16 +171,157 @@ jobs:
           }
           @end
 
+          // ==========================================
+          // BEAT DETECTOR
+          // ==========================================
+          @interface BeatDetector : NSObject
+          + (void)analyzeURL:(NSURL *)url completion:(void(^)(double bpm, NSArray<NSNumber *> *beats, NSError *error))completion;
+          @end
+
+          @implementation BeatDetector
+          + (void)analyzeURL:(NSURL *)url completion:(void(^)(double bpm, NSArray<NSNumber *> *beats, NSError *error))completion {
+              dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                  NSError *err = nil;
+                  NSArray *beats = nil;
+                  double bpm = 0;
+
+                  @try {
+                      AVURLAsset *asset = [AVURLAsset URLAssetWithURL:url options:nil];
+                      AVAssetTrack *track = [asset tracksWithMediaType:AVMediaTypeAudio].firstObject;
+                      if (!track) {
+                          err = [NSError errorWithDomain:@"Vlad" code:1 userInfo:@{NSLocalizedDescriptionKey:@"File không có audio track"}];
+                      } else {
+                          AVAssetReader *reader = [AVAssetReader assetReaderWithAsset:asset error:&err];
+                          if (reader) {
+                              NSDictionary *settings = @{
+                                  AVFormatIDKey: @(kAudioFormatLinearPCM),
+                                  AVLinearPCMBitDepthKey: @16,
+                                  AVLinearPCMIsFloatKey: @NO,
+                                  AVLinearPCMIsBigEndianKey: @NO,
+                                  AVLinearPCMIsNonInterleaved: @NO,
+                                  AVSampleRateKey: @22050,
+                                  AVNumberOfChannelsKey: @1
+                              };
+                              AVAssetReaderTrackOutput *out = [[AVAssetReaderTrackOutput alloc] initWithTrack:track outputSettings:settings];
+                              out.alwaysCopiesSampleData = NO;
+                              [reader addOutput:out];
+                              [reader startReading];
+
+                              NSMutableData *allPCM = [NSMutableData data];
+                              CMSampleBufferRef sample;
+                              while ((sample = [out copyNextSampleBuffer])) {
+                                  CMBlockBufferRef block = CMSampleBufferGetDataBuffer(sample);
+                                  if (block) {
+                                      size_t len = CMBlockBufferGetDataLength(block);
+                                      int16_t *buf = malloc(len);
+                                      CMBlockBufferCopyDataBytes(block, 0, len, buf);
+                                      [allPCM appendBytes:buf length:len];
+                                      free(buf);
+                                  }
+                                  CFRelease(sample);
+                              }
+                              [reader cancelReading];
+
+                              NSInteger sampleCount = allPCM.length / sizeof(int16_t);
+                              int16_t *samples = (int16_t *)allPCM.bytes;
+                              const int hop = 512;
+                              NSInteger frames = sampleCount / hop;
+
+                              if (frames < 16) {
+                                  err = [NSError errorWithDomain:@"Vlad" code:2 userInfo:@{NSLocalizedDescriptionKey:@"Audio quá ngắn"}];
+                              } else {
+                                  double *energy = malloc(frames * sizeof(double));
+                                  for (NSInteger i = 0; i < frames; i++) {
+                                      double e = 0;
+                                      for (int j = 0; j < hop; j++) {
+                                          double s = samples[i*hop + j] / 32768.0;
+                                          e += s * s;
+                                      }
+                                      energy[i] = e / hop;
+                                  }
+
+                                  double *onset = malloc(frames * sizeof(double));
+                                  for (NSInteger i = 0; i < frames; i++) {
+                                      double prev = (i > 0) ? energy[i-1] : energy[0];
+                                      double v = energy[i] - prev;
+                                      onset[i] = (v > 0) ? v : 0;
+                                  }
+
+                                  NSInteger searchMin = 14;
+                                  NSInteger searchMax = 86;
+                                  if (searchMax >= frames) searchMax = frames - 1;
+                                  NSInteger bestLag = 0;
+                                  double bestScore = 0;
+
+                                  for (NSInteger lag = searchMin; lag < searchMax; lag++) {
+                                      double sum = 0;
+                                      for (NSInteger i = 0; i < frames - lag; i++) {
+                                          sum += onset[i] * onset[i+lag];
+                                      }
+                                      sum /= (frames - lag);
+                                      double prefer = 1.0;
+                                      if (lag < 16 || lag > 32) prefer = 0.7;
+                                      sum *= prefer;
+                                      if (sum > bestScore) {
+                                          bestScore = sum;
+                                          bestLag = lag;
+                                      }
+                                  }
+
+                                  if (bestLag > 0) {
+                                      double fps = 22050.0 / hop;
+                                      double beatPeriodSec = bestLag / fps;
+                                      bpm = 60.0 / beatPeriodSec;
+
+                                      double threshold = 0;
+                                      for (NSInteger i = 0; i < frames; i++) threshold += onset[i];
+                                      threshold /= frames;
+                                      threshold *= 1.5;
+
+                                      NSMutableArray *list = [NSMutableArray array];
+                                      for (NSInteger i = 1; i < frames - 1; i++) {
+                                          if (onset[i] > threshold && onset[i] > onset[i-1] && onset[i] >= onset[i+1]) {
+                                              double t = (double)i * hop / 22050.0;
+                                              [list addObject:@(t)];
+                                          }
+                                      }
+                                      beats = list;
+                                      if (list.count == 0) {
+                                          err = [NSError errorWithDomain:@"Vlad" code:3 userInfo:@{NSLocalizedDescriptionKey:@"Không phát hiện beat"}];
+                                      }
+                                  } else {
+                                      err = [NSError errorWithDomain:@"Vlad" code:4 userInfo:@{NSLocalizedDescriptionKey:@"Không tìm được tempo"}];
+                                  }
+
+                                  free(energy);
+                                  free(onset);
+                              }
+                          }
+                      }
+                  } @catch (NSException *e) {
+                      err = [NSError errorWithDomain:@"Vlad" code:99 userInfo:@{NSLocalizedDescriptionKey: e.reason ?: @"Lỗi phân tích"}];
+                  }
+
+                  dispatch_async(dispatch_get_main_queue(), ^{
+                      completion(bpm, beats, err);
+                  });
+              });
+          }
+          @end
+
+          // ==========================================
+          // MENU
+          // ==========================================
           @interface VladMenuView : UIView
           @property (nonatomic, strong) UIView *panel;
           @property (nonatomic, strong) NSArray *tabButtons;
           @property (nonatomic, strong) UIView *contentView;
-          @property (nonatomic, strong) NSMutableArray *functionButtons;
           - (void)setupUI;
           - (void)tabTapped:(UIButton *)sender;
           - (void)renderTab:(NSInteger)index;
           - (void)funcTapped:(UIButton *)sender;
           - (void)showAlert:(NSString *)title msg:(NSString *)msg;
+          - (void)startHapticSync;
           - (void)closeTapped;
           @end
 
@@ -179,8 +333,7 @@ jobs:
           }
           - (void)setupUI {
               self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.7];
-              CGFloat width = 340;
-              CGFloat height = 400;
+              CGFloat width = 340, height = 400;
               self.panel = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, height)];
               self.panel.center = self.center;
               self.panel.backgroundColor = [UIColor colorWithRed:0.05 green:0.05 blue:0.08 alpha:0.98];
@@ -259,7 +412,6 @@ jobs:
               }
               else if (index == 1) {
                   NSArray *funcs = @[@"XEM MÃ QR CŨ", @"ĐIỀN ẢNH HÀNG LOẠT", @"BẮT NHỊP TỰ ĐỘNG"];
-                  self.functionButtons = [NSMutableArray array];
                   for (int i=0; i<3; i++) {
                       UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
                       btn.frame = CGRectMake(0, i*70, self.contentView.bounds.size.width, 60);
@@ -308,19 +460,67 @@ jobs:
               } else if (sender.tag == 1) {
                   [self showAlert:@"Hướng dẫn" msg:@"Hãy dùng tính năng chọn ảnh của Video Star. Tool sẽ tự động lấy ảnh mày chọn và điền vào các lớp Video/Văn bản."];
               } else if (sender.tag == 2) {
-                  [self showAlert:@"Bắt Nhịp" msg:@"Đang phân tích nhịp bài hát... (Bản Limited)"];
+                  if (!gCurrentAudioURL) {
+                      [self showAlert:@"Chưa có nhạc" msg:@"Hãy phát bài hát trong Video Star trước, rồi bấm lại."];
+                      return;
+                  }
+                  [self showAlert:@"Đang phân tích" msg:@"Đợi chút..."];
+                  [BeatDetector analyzeURL:gCurrentAudioURL completion:^(double bpm, NSArray<NSNumber *> *beats, NSError *error) {
+                      if (error) {
+                          [self showAlert:@"Lỗi" msg:error.localizedDescription];
+                      } else {
+                          gDetectedBPM = bpm;
+                          gDetectedBeats = beats;
+                          NSString *msg = [NSString stringWithFormat:@"BPM: %.1f\nSố beat: %lu\n\nHaptic sync sẽ rung theo từng beat khi phát nhạc.", bpm, (unsigned long)beats.count];
+                          [self showAlert:@"Bắt nhịp xong" msg:msg];
+                          [self startHapticSync];
+                      }
+                  }];
               }
+          }
+
+          - (void)startHapticSync {
+              if (!gCurrentPlayer || !gDetectedBeats) return;
+              if (gTimeObserver) {
+                  [gCurrentPlayer removeTimeObserver:gTimeObserver];
+                  gTimeObserver = nil;
+              }
+              NSArray *beats = gDetectedBeats;
+              __block NSInteger lastIdx = -1;
+              gTimeObserver = [gCurrentPlayer addPeriodicTimeObserverForInterval:CMTimeMake(1, 30) queue:dispatch_get_main_queue() usingBlock:^(CMTime time) {
+                  double t = CMTimeGetSeconds(time);
+                  for (NSInteger i = 0; i < (NSInteger)beats.count; i++) {
+                      double bt = beats[i].doubleValue;
+                      if (bt > t - 0.05 && bt <= t + 0.05 && i != lastIdx) {
+                          lastIdx = i;
+                          UIImpactFeedbackGenerator *g = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+                          [g prepare];
+                          [g impactOccurred];
+                          break;
+                      }
+                  }
+              }];
           }
 
           - (void)showAlert:(NSString *)title msg:(NSString *)msg {
               UIAlertController *al = [UIAlertController alertControllerWithTitle:title message:msg preferredStyle:UIAlertControllerStyleAlert];
               [al addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-              UIViewController *root = [UIApplication sharedApplication].keyWindow.rootViewController;
+              UIWindow *win = nil;
+              for (UIWindow *w in [UIApplication sharedApplication].windows) {
+                  if (!w.hidden && w.rootViewController && w != gOverlayWindow) {
+                      win = w;
+                      break;
+                  }
+              }
+              UIViewController *root = win.rootViewController;
               if (root) [root presentViewController:al animated:YES completion:nil];
           }
           - (void)closeTapped { [self removeFromSuperview]; }
           @end
 
+          // ==========================================
+          // LOGO
+          // ==========================================
           @interface VladLogoView : UIView
           - (void)logoTapped;
           - (void)logoPanned:(UIPanGestureRecognizer *)pan;
@@ -359,6 +559,9 @@ jobs:
           }
           @end
 
+          // ==========================================
+          // HOOKS
+          // ==========================================
           %hook PHPickerViewController
           - (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
               %orig;
@@ -369,7 +572,6 @@ jobs:
                           [provider loadObjectOfClass:[UIImage class] completionHandler:^(id<NSItemProviderReading> _Nullable image, NSError * _Nullable error) {
                               if (image) {
                                   gLastQRImage = (UIImage *)image;
-                                  NSLog(@"[VLAD] Đã lấy ảnh mẫu!");
                                   dispatch_async(dispatch_get_main_queue(), ^{
                                       autoFillSmart(gCurrentEditor);
                                   });
@@ -391,6 +593,30 @@ jobs:
           }
           %end
 
+          %hook AVPlayer
+          - (void)play {
+              %orig;
+              gCurrentPlayer = self;
+              AVPlayerItem *item = self.currentItem;
+              if (item && [item.asset isKindOfClass:[AVURLAsset class]]) {
+                  gCurrentAudioURL = ((AVURLAsset *)item.asset).URL;
+              }
+          }
+          %end
+
+          %hook AVAudioPlayer
+          - (instancetype)initWithContentsOfURL:(NSURL *)url error:(NSError **)error {
+              id r = %orig;
+              if (r && url) gCurrentAudioURL = url;
+              return r;
+          }
+          - (BOOL)play {
+              BOOL r = %orig;
+              if (self.url) gCurrentAudioURL = self.url;
+              return r;
+          }
+          %end
+
           static void autoFillSmart(UIViewController *editor) {
               if (!editor || !gLastQRImage) return;
               @try {
@@ -399,25 +625,19 @@ jobs:
                   for (UIImageView *iv in imageViews) {
                       if (iv.bounds.size.width > 40 && iv.bounds.size.height > 40 && iv.tag != 888) {
                           iv.image = gLastQRImage;
-                          NSLog(@"[VLAD] Đã điền ảnh vào lớp Video/Văn bản.");
                       }
                   }
-              } @catch (NSException *e) {
-                  NSLog(@"[VLAD] Lỗi Fill (Đã chặn crash): %@", e.reason);
-              }
+              } @catch (NSException *e) {}
           }
 
           static void searchImageViews(UIView *parent, NSMutableArray *array) {
               for (UIView *sub in parent.subviews) {
-                  if ([sub isKindOfClass:[UIImageView class]]) {
-                      [array addObject:sub];
-                  }
+                  if ([sub isKindOfClass:[UIImageView class]]) [array addObject:sub];
                   searchImageViews(sub, array);
               }
           }
 
           %ctor {
-              NSLog(@"[VLAD] Tool Limited đã load!");
               dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
                   if (!gOverlayWindow) {
                       gOverlayWindow = [[VSPassthroughWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
@@ -431,17 +651,19 @@ jobs:
                   }
               });
           }
-          EOF
+          TWEAKEOF
 
       - name: Build
-        run: make -j1
-
-      - name: Verify build output
         run: |
-          echo "=== dylib files ==="
-          find .theos/obj -type f -name "*.dylib" || true
-          echo "=== .deb files ==="
-          find packages -type f -name "*.deb" 2>/dev/null || true
+          make clean || true
+          make -j1 VERBOSE=1 2>&1 | tee build.log
+          test -f build.log && echo "=== build xong ==="
+
+      - name: Verify
+        run: |
+          echo "=== dylib ==="
+          find .theos/obj -name "*.dylib" -type f -exec ls -la {} \;
+          test -n "$(find .theos/obj -name '*.dylib' -type f)" || (echo "KHÔNG có dylib!" && exit 1)
 
       - name: Package .deb
         run: make package FINALPACKAGE=1
@@ -459,3 +681,11 @@ jobs:
           name: VladTool-deb
           path: packages/*.deb
           if-no-files-found: warn
+
+      - name: Upload build log nếu fail
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore
