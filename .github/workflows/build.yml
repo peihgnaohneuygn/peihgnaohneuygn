@@ -2,7 +2,7 @@ name: Build Vlad Tool
 on: [push, workflow_dispatch]
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-13
     steps:
       - uses: actions/checkout@v3
       
