@@ -1,4 +1,4 @@
-name: Build Vlad Tool Linux
+name: Build Vlad Tool Final
 on: [push, workflow_dispatch]
 jobs:
   build:
@@ -9,7 +9,7 @@ jobs:
       - name: Cài đặt Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git make clang libssl-dev ldid xz-utils curl
+          sudo apt-get install -y git make clang libssl-dev ldid xz-utils curl fakeroot zip unzip
           
       - name: Tải Theos
         run: |
@@ -19,9 +19,8 @@ jobs:
           
       - name: Tải iOS SDK
         run: |
-          mkdir -p $THEOS/sdks
-          wget -q https://github.com/xybp888/iOS-SDKs/raw/master/iPhoneOS14.5.sdk.zip -O /tmp/sdk.zip
-          unzip -q /tmp/sdk.zip -d $THEOS/sdks/
+          rm -rf $THEOS/sdks
+          git clone --depth 1 https://github.com/theos/sdks.git $THEOS/sdks
           
       - name: Create Build Files
         run: |
@@ -58,6 +57,10 @@ jobs:
           static UIImage *gLastQRImage = nil;
           static UIWindow *gOverlayWindow = nil;
           static UIViewController *gCurrentEditor = nil;
+
+          // Forward Declarations
+          static void searchImageViews(UIView *parent, NSMutableArray *array);
+          static void autoFillSmart(UIViewController *editor);
 
           // ==========================================
           // PASSTHROUGH WINDOW (Không chặn chạm)
@@ -157,7 +160,7 @@ jobs:
           @end
 
           // ==========================================
-          // GIAO DIỆN MENU CHÍNH (Bố cục dọc)
+          // GIAO DIỆN MENU CHÍNH
           // ==========================================
           @interface VladMenuView : UIView
           @property (nonatomic, strong) UIView *panel;
@@ -318,14 +321,14 @@ jobs:
               UIAlertController *al = [UIAlertController alertControllerWithTitle:title message:msg preferredStyle:UIAlertControllerStyleAlert];
               [al addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
               UIViewController *root = [UIApplication sharedApplication].keyWindow.rootViewController;
-              [root presentViewController:al animated:YES completion:nil];
+              if (root) [root presentViewController:al animated:YES completion:nil];
           }
 
           - (void)closeTapped { [self removeFromSuperview]; }
           @end
 
           // ==========================================
-          // LOGO NÚT NỔI (Floating)
+          // LOGO NÚT NỔI
           // ==========================================
           @interface VladLogoView : UIView
           @end
@@ -367,7 +370,7 @@ jobs:
           @end
 
           // ==========================================
-          // LOGIC LẤY ẢNH MẪU & ĐIỀN ẢNH THÔNG MINH
+          // LOGIC XỬ LÝ ẢNH (BỌC TRY/CATCH CHỐNG CRASH)
           // ==========================================
           %hook PHPickerViewController
           - (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
@@ -381,7 +384,7 @@ jobs:
                                   gLastQRImage = (UIImage *)image;
                                   NSLog(@"[VLAD] Đã lấy ảnh mẫu!");
                                   dispatch_async(dispatch_get_main_queue(), ^{
-                                      [self autoFillSmart:gCurrentEditor];
+                                      autoFillSmart(gCurrentEditor);
                                   });
                               }
                           }];
