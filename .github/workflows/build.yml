@@ -17,9 +17,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y git make clang libssl-dev libplist-dev xz-utils curl fakeroot zip unzip wget
-          curl -sLO https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_linux_x86_64
-          chmod +x ldid_linux_x86_64
-          sudo mv ldid_linux_x86_64 /usr/local/bin/ldid
+          
+          # Tạo fake ldid để bỏ qua bước ký
+          sudo touch /usr/local/bin/ldid
+          sudo chmod +x /usr/local/bin/ldid
+          echo '#!/bin/sh' | sudo tee /usr/local/bin/ldid
+          echo 'exit 0' | sudo tee -a /usr/local/bin/ldid
           
       - name: Setup Theos & SDK
         run: |
@@ -28,7 +31,8 @@ jobs:
           echo "THEOS=$THEOS" >> $GITHUB_ENV
           
           mkdir -p $THEOS/sdks
-          curl -L -o sdk.zip "https://github.com/xybp888/iOS-SDKs/raw/master/iPhoneOS14.5.sdk.zip"
+          # Tải SDK 14.5 chuẩn từ kho Theos
+          curl -L -o sdk.zip "https://github.com/theos/sdks/raw/master/iPhoneOS14.5.sdk.zip"
           unzip -q sdk.zip -d $THEOS/sdks/
           rm sdk.zip
           
