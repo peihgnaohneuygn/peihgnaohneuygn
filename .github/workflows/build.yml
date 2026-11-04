@@ -2,20 +2,40 @@ name: Build Vlad Tool Final
 on: [push, workflow_dispatch]
 jobs:
   build:
-    runs-on: macos-13
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       
-      - name: Setup Theos
+      - name: Tạo RAM ảo (Chống tràn RAM)
+        run: |
+          sudo fallocate -l 4G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          
+      - name: Cài đặt Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git make clang libssl-dev libplist-dev xz-utils curl fakeroot zip unzip wget
+          curl -sLO https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_linux_x86_64
+          chmod +x ldid_linux_x86_64
+          sudo mv ldid_linux_x86_64 /usr/local/bin/ldid
+          
+      - name: Setup Theos & SDK
         run: |
           export THEOS=$HOME/theos
-          git clone --recursive https://github.com/theos/theos.git $THEOS
+          git clone --depth 1 https://github.com/theos/theos.git $THEOS
           echo "THEOS=$THEOS" >> $GITHUB_ENV
+          
+          mkdir -p $THEOS/sdks
+          curl -L -o sdk.zip "https://github.com/xybp888/iOS-SDKs/raw/master/iPhoneOS14.5.sdk.zip"
+          unzip -q sdk.zip -d $THEOS/sdks/
+          rm sdk.zip
           
       - name: Create Build Files
         run: |
           cat << 'EOF' > Makefile
-          ARCHS = arm64 arm64e
+          ARCHS = arm64
           TARGET = iphone:clang:latest:14.0
           include $(THEOS)/makefiles/common.mk
           TWEAK_NAME = VladAuto
