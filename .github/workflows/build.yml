@@ -8,10 +8,13 @@ jobs:
 
       - name: Tạo RAM ảo
         run: |
-          sudo fallocate -l 4G /swapfile
+          sudo swapoff /swapfile 2>/dev/null || true
+          sudo rm -f /swapfile
+          sudo fallocate -l 4G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=4096
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
+          free -h
 
       - name: Cài Dependencies
         run: |
@@ -49,7 +52,7 @@ jobs:
           include $(THEOS)/makefiles/common.mk
           TWEAK_NAME = VladAuto
           VladAuto_FILES = Tweak.xm
-          VladAuto_FRAMEWORKS = UIKit Foundation AVFoundation Photos PhotosUI QuartzCore
+          VladAuto_FRAMEWORKS = UIKit Foundation AVFoundation Photos PhotosUI QuartzCore CoreMedia AudioToolbox
           VladAuto_CFLAGS = -fobjc-arc -Wno-everything
           include $(THEOS_MAKE_PATH)/tweak.mk
           EOF
@@ -72,6 +75,8 @@ jobs:
           #import <PhotosUI/PhotosUI.h>
           #import <QuartzCore/QuartzCore.h>
           #import <objc/runtime.h>
+          #import <CoreMedia/CoreMedia.h>
+          #import <AudioToolbox/AudioToolbox.h>
 
           static UIImage *gLastQRImage = nil;
           static UIWindow *gOverlayWindow = nil;
@@ -655,9 +660,10 @@ jobs:
 
       - name: Build
         run: |
+          set -o pipefail
           make clean || true
           make -j1 VERBOSE=1 2>&1 | tee build.log
-          test -f build.log && echo "=== build xong ==="
+          echo "=== build xong ==="
 
       - name: Verify
         run: |
