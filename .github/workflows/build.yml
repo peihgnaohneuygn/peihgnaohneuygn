@@ -1,16 +1,27 @@
-name: Build Vlad Tool
+name: Build Vlad Tool Linux
 on: [push, workflow_dispatch]
 jobs:
   build:
-    runs-on: macos-13
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       
-      - name: Setup Theos
+      - name: Cài đặt Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git make clang libssl-dev ldid xz-utils curl
+          
+      - name: Tải Theos
         run: |
           export THEOS=$HOME/theos
           git clone --recursive https://github.com/theos/theos.git $THEOS
           echo "THEOS=$THEOS" >> $GITHUB_ENV
+          
+      - name: Tải iOS SDK
+        run: |
+          mkdir -p $THEOS/sdks
+          wget -q https://github.com/xybp888/iOS-SDKs/raw/master/iPhoneOS14.5.sdk.zip -O /tmp/sdk.zip
+          unzip -q /tmp/sdk.zip -d $THEOS/sdks/
           
       - name: Create Build Files
         run: |
