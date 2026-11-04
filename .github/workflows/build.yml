@@ -36,13 +36,10 @@ jobs:
           mkdir -p $THEOS/sdks
           git clone --depth 1 https://github.com/theos/sdks.git /tmp/sdks
           cd /tmp/sdks && git lfs pull
-          ls -la /tmp/sdks/*.sdk.zip | head -5
-
-          cp /tmp/sdks/iPhoneOS14.5.sdk.zip $THEOS/sdks/
-          cd $THEOS/sdks && unzip -q iPhoneOS14.5.sdk.zip && rm iPhoneOS14.5.sdk.zip
-
+          cp -R /tmp/sdks/iPhoneOS14.5.sdk $THEOS/sdks/
           echo "=== SDK đã cài ==="
           ls -la $THEOS/sdks/
+          ls $THEOS/sdks/iPhoneOS14.5.sdk/ | head -5
 
       - name: Tạo Build Files
         run: |
