@@ -19,17 +19,27 @@ jobs:
       - name: Cài Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git git-lfs make clang libssl-dev libplist-dev xz-utils curl fakeroot zip unzip wget dpkg
+          sudo apt-get install -y git git-lfs make clang lld binutils libssl-dev libplist-dev xz-utils curl fakeroot zip unzip wget dpkg
           git lfs install
 
           printf '#!/bin/sh\nexit 0\n' | sudo tee /usr/local/bin/ldid > /dev/null
           sudo chmod +x /usr/local/bin/ldid
 
-      - name: Setup Theos
+      - name: Setup Theos & Toolchain
         run: |
           export THEOS=$HOME/theos
           git clone --depth 1 https://github.com/theos/theos.git $THEOS
           $THEOS/bin/update-theos
+          
+          # Fix missing toolchain bằng cách symlink với clang hệ thống
+          mkdir -p $THEOS/toolchain/linux/iphone/bin
+          ln -sf /usr/bin/clang $THEOS/toolchain/linux/iphone/bin/clang
+          ln -sf /usr/bin/clang++ $THEOS/toolchain/linux/iphone/bin/clang++
+          ln -sf /usr/bin/ld $THEOS/toolchain/linux/iphone/bin/ld
+          ln -sf /usr/bin/ar $THEOS/toolchain/linux/iphone/bin/ar
+          ln -sf /usr/bin/strip $THEOS/toolchain/linux/iphone/bin/strip
+          ln -sf /usr/bin/nm $THEOS/toolchain/linux/iphone/bin/nm
+          
           echo "THEOS=$THEOS" >> $GITHUB_ENV
 
       - name: Tải SDK (dùng git LFS — KHÔNG curl)
@@ -174,9 +184,6 @@ jobs:
           }
           @end
 
-          // ==========================================
-          // BEAT DETECTOR
-          // ==========================================
           @interface BeatDetector : NSObject
           + (void)analyzeURL:(NSURL *)url completion:(void(^)(double bpm, NSArray<NSNumber *> *beats, NSError *error))completion;
           @end
@@ -312,9 +319,6 @@ jobs:
           }
           @end
 
-          // ==========================================
-          // MENU
-          // ==========================================
           @interface VladMenuView : UIView
           @property (nonatomic, strong) UIView *panel;
           @property (nonatomic, strong) NSArray *tabButtons;
@@ -521,9 +525,6 @@ jobs:
           - (void)closeTapped { [self removeFromSuperview]; }
           @end
 
-          // ==========================================
-          // LOGO
-          // ==========================================
           @interface VladLogoView : UIView
           - (void)logoTapped;
           - (void)logoPanned:(UIPanGestureRecognizer *)pan;
@@ -562,9 +563,6 @@ jobs:
           }
           @end
 
-          // ==========================================
-          // HOOKS
-          // ==========================================
           %hook PHPickerViewController
           - (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
               %orig;
