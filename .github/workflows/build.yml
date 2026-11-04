@@ -9,7 +9,12 @@ jobs:
       - name: Cài đặt Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git make clang libssl-dev ldid xz-utils curl fakeroot zip unzip
+          sudo apt-get install -y git make clang libssl-dev libplist-dev xz-utils curl fakeroot zip unzip
+          
+          # Tải ldid phiên bản dành cho Linux
+          curl -sLO https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_linux_x86_64
+          chmod +x ldid_linux_x86_64
+          sudo mv ldid_linux_x86_64 /usr/local/bin/ldid
           
       - name: Tải Theos
         run: |
