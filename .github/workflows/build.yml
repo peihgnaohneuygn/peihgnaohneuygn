@@ -29,6 +29,7 @@ jobs:
         run: |
           export THEOS=$HOME/theos
           git clone --depth 1 https://github.com/theos/theos.git $THEOS
+          $THEOS/bin/update-theos
           echo "THEOS=$THEOS" >> $GITHUB_ENV
 
       - name: Tải SDK (dùng git LFS — KHÔNG curl)
