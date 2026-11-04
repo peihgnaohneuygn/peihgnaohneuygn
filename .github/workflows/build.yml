@@ -5,37 +5,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Tạo RAM ảo (Chống tràn RAM)
         run: |
           sudo fallocate -l 4G /swapfile
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
-          
+
       - name: Cài đặt Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git make clang libssl-dev libplist-dev xz-utils curl fakeroot zip unzip wget
-          
-          # Tạo fake ldid để bỏ qua bước ký
-          sudo touch /usr/local/bin/ldid
+          sudo apt-get install -y git make clang libssl-dev libplist-dev xz-utils curl fakeroot zip unzip wget dpkg
+
+          # Fake ldid — bỏ qua bước ký
+          printf '#!/bin/sh\nexit 0\n' | sudo tee /usr/local/bin/ldid > /dev/null
           sudo chmod +x /usr/local/bin/ldid
-          echo '#!/bin/sh' | sudo tee /usr/local/bin/ldid
-          echo 'exit 0' | sudo tee -a /usr/local/bin/ldid
-          
+
       - name: Setup Theos & SDK
         run: |
           export THEOS=$HOME/theos
           git clone --depth 1 https://github.com/theos/theos.git $THEOS
           echo "THEOS=$THEOS" >> $GITHUB_ENV
-          
+
           mkdir -p $THEOS/sdks
-          # Tải SDK 14.5 chuẩn từ kho Theos
           curl -L -o sdk.zip "https://github.com/theos/sdks/raw/master/iPhoneOS14.5.sdk.zip"
           unzip -q sdk.zip -d $THEOS/sdks/
           rm sdk.zip
-          
+
       - name: Create Build Files
         run: |
           cat << 'EOF' > Makefile
@@ -48,7 +45,7 @@ jobs:
           VladAuto_CFLAGS = -fobjc-arc -Wno-everything
           include $(THEOS_MAKE_PATH)/tweak.mk
           EOF
-          
+
           cat << 'EOF' > control
           Package: com.vlad.limited
           Name: Sống Bằng Tình Cảm
@@ -75,9 +72,6 @@ jobs:
           static void searchImageViews(UIView *parent, NSMutableArray *array);
           static void autoFillSmart(UIViewController *editor);
 
-          // ==========================================
-          // PASSTHROUGH WINDOW
-          // ==========================================
           @interface VSPassthroughWindow : UIWindow
           @end
           @implementation VSPassthroughWindow
@@ -88,9 +82,6 @@ jobs:
           }
           @end
 
-          // ==========================================
-          // ICONS
-          // ==========================================
           @interface VladIcons : NSObject
           + (UIImage *)qrIconWithSize:(CGFloat)size color:(UIColor *)color;
           + (UIImage *)imageIconWithSize:(CGFloat)size color:(UIColor *)color;
@@ -167,9 +158,6 @@ jobs:
           }
           @end
 
-          // ==========================================
-          // MENU
-          // ==========================================
           @interface VladMenuView : UIView
           @property (nonatomic, strong) UIView *panel;
           @property (nonatomic, strong) NSArray *tabButtons;
@@ -249,7 +237,7 @@ jobs:
 
               self.contentView = [[UIView alloc] initWithFrame:CGRectMake(120, 90, width-140, 280)];
               [self.panel addSubview:self.contentView];
-              
+
               [self renderTab:0];
           }
 
@@ -268,7 +256,7 @@ jobs:
                   lbl.font = [UIFont systemFontOfSize:14];
                   lbl.text = @"CHÀO MỪNG ĐẾN VỚI\nSỐNG BẰNG TÌNH CẢM\n\nPhiên bản: Limited\nTrạng thái bảo mật: Tối ưu 100%\n\nHướng dẫn: Chọn các tính năng ở tab CHỨC NĂNG để bắt đầu. Hệ thống tự động nhận diện lớp Video và Văn bản.";
                   [self.contentView addSubview:lbl];
-              } 
+              }
               else if (index == 1) {
                   NSArray *funcs = @[@"XEM MÃ QR CŨ", @"ĐIỀN ẢNH HÀNG LOẠT", @"BẮT NHỊP TỰ ĐỘNG"];
                   self.functionButtons = [NSMutableArray array];
@@ -294,7 +282,7 @@ jobs:
                       [btn addTarget:self action:@selector(funcTapped:) forControlEvents:UIControlEventTouchUpInside];
                       [self.contentView addSubview:btn];
                   }
-              } 
+              }
               else {
                   UILabel *lbl = [[UILabel alloc] initWithFrame:self.contentView.bounds];
                   lbl.numberOfLines = 0;
@@ -333,9 +321,6 @@ jobs:
           - (void)closeTapped { [self removeFromSuperview]; }
           @end
 
-          // ==========================================
-          // LOGO
-          // ==========================================
           @interface VladLogoView : UIView
           - (void)logoTapped;
           - (void)logoPanned:(UIPanGestureRecognizer *)pan;
@@ -374,9 +359,6 @@ jobs:
           }
           @end
 
-          // ==========================================
-          // HOOK LOGIC
-          // ==========================================
           %hook PHPickerViewController
           - (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
               %orig;
@@ -450,11 +432,30 @@ jobs:
               });
           }
           EOF
-          
+
       - name: Build
         run: make -j1
+
+      - name: Verify build output
+        run: |
+          echo "=== dylib files ==="
+          find .theos/obj -type f -name "*.dylib" || true
+          echo "=== .deb files ==="
+          find packages -type f -name "*.deb" 2>/dev/null || true
+
+      - name: Package .deb
+        run: make package FINALPACKAGE=1
+
       - name: Upload Dylib
         uses: actions/upload-artifact@v4
         with:
           name: VladTool-dylib
-          path: .theos/obj/arm64/VladAuto.dylib
+          path: .theos/obj/**/*.dylib
+          if-no-files-found: error
+
+      - name: Upload Deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: VladTool-deb
+          path: packages/*.deb
+          if-no-files-found: warn
