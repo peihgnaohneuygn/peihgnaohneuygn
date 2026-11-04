@@ -6,11 +6,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Setup Theos
-        uses: Randomblock1/theos-action@v1
-        
-      - name: Download SDK
+      - name: Cài đặt Dependencies & Ldid
         run: |
+          sudo apt-get update
+          sudo apt-get install -y git make clang libssl-dev libplist-dev xz-utils curl fakeroot zip unzip wget
+          
+          # Tải ldid bản Linux
+          curl -sLO https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_linux_x86_64
+          chmod +x ldid_linux_x86_64
+          sudo mv ldid_linux_x86_64 /usr/local/bin/ldid
+          
+      - name: Setup Theos & SDK
+        run: |
+          export THEOS=$HOME/theos
+          git clone --depth 1 https://github.com/theos/theos.git $THEOS
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
+          
           mkdir -p $THEOS/sdks
           curl -L -o sdk.zip "https://github.com/xybp888/iOS-SDKs/raw/master/iPhoneOS14.5.sdk.zip"
           unzip -q sdk.zip -d $THEOS/sdks/
@@ -52,12 +63,11 @@ jobs:
           static UIWindow *gOverlayWindow = nil;
           static UIViewController *gCurrentEditor = nil;
 
-          // Forward Declarations
           static void searchImageViews(UIView *parent, NSMutableArray *array);
           static void autoFillSmart(UIViewController *editor);
 
           // ==========================================
-          // PASSTHROUGH WINDOW (Không chặn chạm)
+          // PASSTHROUGH WINDOW
           // ==========================================
           @interface VSPassthroughWindow : UIWindow
           @end
@@ -70,7 +80,7 @@ jobs:
           @end
 
           // ==========================================
-          // CUSTOM ICONS (Vẽ bằng UIBezierPath)
+          // ICONS
           // ==========================================
           @interface VladIcons : NSObject
           + (UIImage *)qrIconWithSize:(CGFloat)size color:(UIColor *)color;
@@ -80,7 +90,6 @@ jobs:
           @end
 
           @implementation VladIcons
-
           + (UIImage *)qrIconWithSize:(CGFloat)size color:(UIColor *)color {
               UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(size, size)];
               return [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
@@ -98,7 +107,6 @@ jobs:
                   [path stroke];
               }];
           }
-
           + (UIImage *)imageIconWithSize:(CGFloat)size color:(UIColor *)color {
               UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(size, size)];
               return [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
@@ -115,7 +123,6 @@ jobs:
                   [path stroke];
               }];
           }
-
           + (UIImage *)musicIconWithSize:(CGFloat)size color:(UIColor *)color {
               UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(size, size)];
               return [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
@@ -133,7 +140,6 @@ jobs:
                   [path stroke];
               }];
           }
-
           + (UIImage *)vLogoWithSize:(CGFloat)size color:(UIColor *)color {
               UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(size, size)];
               return [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
@@ -142,7 +148,6 @@ jobs:
                   UIBezierPath *circle = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(2, 2, size-4, size-4)];
                   circle.lineWidth = 2.0;
                   [circle stroke];
-                  
                   UIBezierPath *v = [UIBezierPath bezierPath];
                   v.lineWidth = 4.0;
                   [v moveToPoint:CGPointMake(size*0.3, size*0.3)];
@@ -154,7 +159,7 @@ jobs:
           @end
 
           // ==========================================
-          // GIAO DIỆN MENU CHÍNH
+          // MENU
           // ==========================================
           @interface VladMenuView : UIView
           @property (nonatomic, strong) UIView *panel;
@@ -170,16 +175,13 @@ jobs:
           @end
 
           @implementation VladMenuView
-
           - (instancetype)initWithFrame:(CGRect)frame {
               self = [super initWithFrame:frame];
               if (self) [self setupUI];
               return self;
           }
-
           - (void)setupUI {
               self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.7];
-              
               CGFloat width = 340;
               CGFloat height = 400;
               self.panel = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, height)];
@@ -250,7 +252,6 @@ jobs:
 
           - (void)renderTab:(NSInteger)index {
               for (UIView *v in self.contentView.subviews) [v removeFromSuperview];
-              
               if (index == 0) {
                   UILabel *lbl = [[UILabel alloc] initWithFrame:self.contentView.bounds];
                   lbl.numberOfLines = 0;
@@ -270,20 +271,17 @@ jobs:
                       btn.layer.borderWidth = 1.0;
                       btn.layer.borderColor = [UIColor colorWithRed:0.0 green:0.8 blue:1.0 alpha:0.5].CGColor;
                       btn.tag = i;
-                      
                       UIImage *icon = nil;
                       if (i == 0) icon = [VladIcons qrIconWithSize:24 color:[UIColor colorWithRed:0.0 green:0.8 blue:1.0 alpha:1.0]];
                       if (i == 1) icon = [VladIcons imageIconWithSize:24 color:[UIColor colorWithRed:0.0 green:0.8 blue:1.0 alpha:1.0]];
                       if (i == 2) icon = [VladIcons musicIconWithSize:24 color:[UIColor colorWithRed:0.0 green:0.8 blue:1.0 alpha:1.0]];
                       [btn setImage:icon forState:UIControlStateNormal];
                       btn.imageEdgeInsets = UIEdgeInsetsMake(0, 10, 0, 10);
-                      
                       [btn setTitle:funcs[i] forState:UIControlStateNormal];
                       [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
                       btn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
                       btn.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
                       btn.titleEdgeInsets = UIEdgeInsetsMake(0, 20, 0, 0);
-                      
                       [btn addTarget:self action:@selector(funcTapped:) forControlEvents:UIControlEventTouchUpInside];
                       [self.contentView addSubview:btn];
                   }
@@ -323,12 +321,11 @@ jobs:
               UIViewController *root = [UIApplication sharedApplication].keyWindow.rootViewController;
               if (root) [root presentViewController:al animated:YES completion:nil];
           }
-
           - (void)closeTapped { [self removeFromSuperview]; }
           @end
 
           // ==========================================
-          // LOGO NÚT NỔI
+          // LOGO
           // ==========================================
           @interface VladLogoView : UIView
           - (void)logoTapped;
@@ -346,14 +343,11 @@ jobs:
                   self.layer.shadowRadius = 10;
                   self.layer.shadowOpacity = 1.0;
                   self.layer.shadowOffset = CGSizeZero;
-                  
                   UIImageView *logo = [[UIImageView alloc] initWithImage:[VladIcons vLogoWithSize:40 color:[UIColor whiteColor]]];
                   logo.center = CGPointMake(frame.size.width/2, frame.size.height/2);
                   [self addSubview:logo];
-                  
                   UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(logoTapped)];
                   [self addGestureRecognizer:tap];
-                  
                   UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(logoPanned:)];
                   [self addGestureRecognizer:pan];
               }
@@ -372,7 +366,7 @@ jobs:
           @end
 
           // ==========================================
-          // LOGIC XỬ LÝ ẢNH
+          // HOOK LOGIC
           // ==========================================
           %hook PHPickerViewController
           - (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
@@ -411,7 +405,6 @@ jobs:
               @try {
                   NSMutableArray *imageViews = [NSMutableArray array];
                   searchImageViews(editor.view, imageViews);
-                  
                   for (UIImageView *iv in imageViews) {
                       if (iv.bounds.size.width > 40 && iv.bounds.size.height > 40 && iv.tag != 888) {
                           iv.image = gLastQRImage;
@@ -442,7 +435,6 @@ jobs:
                       gOverlayWindow.rootViewController = [[UIViewController alloc] init];
                       gOverlayWindow.rootViewController.view.backgroundColor = [UIColor clearColor];
                       gOverlayWindow.hidden = NO;
-                      
                       VladLogoView *logo = [[VladLogoView alloc] initWithFrame:CGRectMake([UIScreen mainScreen].bounds.size.width - 70, 150, 60, 60)];
                       [gOverlayWindow.rootViewController.view addSubview:logo];
                   }
