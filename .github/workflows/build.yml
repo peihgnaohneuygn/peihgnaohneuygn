@@ -216,7 +216,7 @@ jobs:
                                   CMBlockBufferRef block = CMSampleBufferGetDataBuffer(sample);
                                   if (block) {
                                       size_t len = CMBlockBufferGetDataLength(block);
-                                      int16_t *buf = malloc(len);
+                                      int16_t *buf = (int16_t *)malloc(len);
                                       CMBlockBufferCopyDataBytes(block, 0, len, buf);
                                       [allPCM appendBytes:buf length:len];
                                       free(buf);
@@ -233,7 +233,7 @@ jobs:
                               if (frames < 16) {
                                   err = [NSError errorWithDomain:@"Vlad" code:2 userInfo:@{NSLocalizedDescriptionKey:@"Audio quá ngắn"}];
                               } else {
-                                  double *energy = malloc(frames * sizeof(double));
+                                  double *energy = (double *)malloc(frames * sizeof(double));
                                   for (NSInteger i = 0; i < frames; i++) {
                                       double e = 0;
                                       for (int j = 0; j < hop; j++) {
@@ -243,7 +243,7 @@ jobs:
                                       energy[i] = e / hop;
                                   }
 
-                                  double *onset = malloc(frames * sizeof(double));
+                                  double *onset = (double *)malloc(frames * sizeof(double));
                                   for (NSInteger i = 0; i < frames; i++) {
                                       double prev = (i > 0) ? energy[i-1] : energy[0];
                                       double v = energy[i] - prev;
@@ -496,9 +496,9 @@ jobs:
                       double bt = beats[i].doubleValue;
                       if (bt > t - 0.05 && bt <= t + 0.05 && i != lastIdx) {
                           lastIdx = i;
-                          UIImpactFeedbackGenerator *g = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-                          [g prepare];
-                          [g impactOccurred];
+                          UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+                          [gen prepare];
+                          [gen impactOccurred];
                           break;
                       }
                   }
