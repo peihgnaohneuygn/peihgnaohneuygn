@@ -1,651 +1,703 @@
-#import <UIKit/UIKit.h>
-#import <Foundation/Foundation.h>
-#import <Photos/Photos.h>
-#import <PhotosUI/PhotosUI.h>
-#import <QuartzCore/QuartzCore.h>
-#import <AVFoundation/AVFoundation.h>
-#import <objc/runtime.h>
-#import <objc/message.h>
+name: Build Vlad Tool Video Star (Full Features)
 
-static UIImage  *gLastQRImage = nil;
-static NSString *gLastQRCode  = nil;
-static UIWindow *gOverlayWindow = nil;
-static UIViewController *gCurrentEditor = nil;
-static BOOL gOverlayInitialized = NO;
-static BOOL gHasShownWelcomeAlert = NO;
+on:
+  push:
+  workflow_dispatch:
 
-// Bộ bẫy chống crash toàn cục tối tân
-static void VladUncaughtExceptionHandler(NSException *exception) {
-    // Chặn và triệt tiêu mọi ngoại lệ gây văng app ngầm
-}
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
 
-@interface VladUI : NSObject
-+ (UIColor *)neonWhite;
-+ (UIColor *)neonBlackBg;
-+ (UIImage *)icon:(NSString *)name size:(CGFloat)size color:(UIColor *)color;
-@end
+      - name: Setup Theos
+        run: |
+          set -e
+          git clone --recursive --depth 1 https://github.com/theos/theos.git $HOME/theos
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+          echo "$HOME/theos/bin" >> $GITHUB_PATH
 
-@implementation VladUI
-+ (UIColor *)neonWhite { return [UIColor colorWithWhite:1.0 alpha:1.0]; }
-+ (UIColor *)neonBlackBg { return [UIColor colorWithRed:0.04 green:0.04 blue:0.04 alpha:0.98]; }
-+ (UIImage *)icon:(NSString *)name size:(CGFloat)size color:(UIColor *)color {
-    if (@available(iOS 13.0, *)) {
-        UIImage *img = [UIImage systemImageNamed:name];
-        UIImageSymbolConfiguration *cfg =
-            [UIImageSymbolConfiguration configurationWithPointSize:size weight:UIImageSymbolWeightBold];
-        return [[img imageWithConfiguration:cfg] imageWithTintColor:color
-                                                   renderingMode:UIImageRenderingModeAlwaysOriginal];
-    }
-    return nil;
-}
-@end
+      - name: Download SDK 16.5
+        run: |
+          set -e
+          mkdir -p $HOME/theos/sdks
+          git clone --depth 1 https://github.com/theos/sdks.git /tmp/sdks
+          cp -R /tmp/sdks/iPhoneOS16.5.sdk $HOME/theos/sdks/
+          rm -rf /tmp/sdks
 
-@interface VSPassthroughWindow : UIWindow
-@end
-@implementation VSPassthroughWindow
-- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    UIView *hit = [super hitTest:point withEvent:event];
-    if (hit == self || hit == self.rootViewController.view) return nil;
-    return hit;
-}
-@end
+      - name: Install ldid & dpkg
+        run: |
+          brew install ldid dpkg
 
-// Quản lý bộ đệm QR Code siêu tốc (Cache in-memory + disk)
-static NSString *VladQRDir(void) {
-    static NSString *dir = nil;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        dir = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject
-               stringByAppendingPathComponent:@"VladQR"];
-        [[NSFileManager defaultManager] createDirectoryAtPath:dir
-                                  withIntermediateDirectories:YES attributes:nil error:nil];
-    });
-    return dir;
-}
+      - name: Create Makefile & Tweak.mm
+        run: |
+          cat > Makefile << 'MAKEEOF'
+          ARCHS = arm64
+          TARGET = iphone:clang:16.5:14.0
+          include $(THEOS)/makefiles/common.mk
 
-static void VladSaveQR(UIImage *img, NSString *code) {
-    if (!img) return;
-    gLastQRImage = img; // Lưu cache trực tiếp vào RAM để load không có độ trễ
-    gLastQRCode = code;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-        NSData *data = UIImagePNGRepresentation(img);
-        if (data) {
-            [data writeToFile:[VladQRDir() stringByAppendingPathComponent:@"last_qr.png"] atomically:YES];
-        }
-        if (code) {
-            [code writeToFile:[VladQRDir() stringByAppendingPathComponent:@"last_code.txt"]
-                     atomically:YES encoding:NSUTF8StringEncoding error:nil];
-        }
-    });
-}
+          LIBRARY_NAME = VladAuto
+          VladAuto_FILES = Tweak.mm
+          VladAuto_FRAMEWORKS = UIKit Foundation QuartzCore AVFoundation
+          
+          VladAuto_CFLAGS  = -fobjc-arc -w
+          VladAuto_CCFLAGS = -fobjc-arc -w -std=c++17 -stdlib=libc++
+          VladAuto_LDFLAGS = -Wl,-flat_namespace,-undefined,suppress
+          VladAuto_USE_MODULES = 0
 
-static UIImage *VladLoadQRImage(void) {
-    if (gLastQRImage) return gLastQRImage;
-    NSString *path = [VladQRDir() stringByAppendingPathComponent:@"last_qr.png"];
-    if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
-        gLastQRImage = [UIImage imageWithContentsOfFile:path];
-        return gLastQRImage;
-    }
-    return nil;
-}
+          include $(THEOS_MAKE_PATH)/library.mk
+          MAKEEOF
 
-static NSString *VladLoadQRCode(void) {
-    if (gLastQRCode) return gLastQRCode;
-    NSString *path = [VladQRDir() stringByAppendingPathComponent:@"last_code.txt"];
-    if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
-        gLastQRCode = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
-        return gLastQRCode;
-    }
-    return nil;
-}
+          cat > Tweak.mm << 'TWEAKEOF'
+          #import <UIKit/UIKit.h>
+          #import <Foundation/Foundation.h>
+          #import <Photos/Photos.h>
+          #import <PhotosUI/PhotosUI.h>
+          #import <QuartzCore/QuartzCore.h>
+          #import <AVFoundation/AVFoundation.h>
+          #import <objc/runtime.h>
+          #import <objc/message.h>
 
-static UIViewController *CurrentKeyVC(void) {
-    UIWindow *kw = nil;
-    if (@available(iOS 13.0, *)) {
-        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-            if (s.activationState != UISceneActivationStateForegroundActive) continue;
-            if ([s isKindOfClass:[UIWindowScene class]]) {
-                for (UIWindow *w in ((UIWindowScene *)s).windows) {
-                    if (!w.hidden && w != gOverlayWindow && w.windowLevel == UIWindowLevelNormal) { kw = w; break; }
-                }
-            }
-            if (kw) break;
-        }
-    }
-    if (!kw) kw = [UIApplication sharedApplication].keyWindow;
-    return kw.rootViewController;
-}
+          static UIImage  *gLastQRImage = nil;
+          static NSString *gLastQRCode  = nil;
+          static UIWindow *gOverlayWindow = nil;
+          static UIViewController *gCurrentEditor = nil;
+          static BOOL gOverlayInitialized = NO;
+          static BOOL gHasShownWelcomeAlert = NO;
 
-// -------------------------------------------------------------
-// GIAO DIỆN XEM CODE GẦN NHẤT (SIÊU MƯỢT, KHÔNG LAG)
-// -------------------------------------------------------------
-@interface VladQRPreviewVC : UIViewController
-@property (nonatomic, strong) UIImage *qrImage;
-@property (nonatomic, copy)   NSString *qrCode;
-@end
+          static void VladUncaughtExceptionHandler(NSException *exception) {}
 
-@implementation VladQRPreviewVC
-- (instancetype)initWithImage:(UIImage *)image code:(NSString *)code {
-    if (self = [super init]) {
-        _qrImage = image; 
-        _qrCode = code;
-        self.modalPresentationStyle = UIModalPresentationOverFullScreen;
-    }
-    return self;
-}
+          @interface VladUI : NSObject
+          + (UIColor *)neonWhite;
+          + (UIColor *)neonBlackBg;
+          + (UIImage *)icon:(NSString *)name size:(CGFloat)size color:(UIColor *)color;
+          @end
 
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    self.view.backgroundColor = [UIColor colorWithWhite:0.02 alpha:0.96];
+          @implementation VladUI
+          + (UIColor *)neonWhite { return [UIColor colorWithWhite:1.0 alpha:1.0]; }
+          + (UIColor *)neonBlackBg { return [UIColor colorWithRed:0.04 green:0.04 blue:0.04 alpha:0.98]; }
+          + (UIImage *)icon:(NSString *)name size:(CGFloat)size color:(UIColor *)color {
+              if (@available(iOS 13.0, *)) {
+                  UIImage *img = [UIImage systemImageNamed:name];
+                  UIImageSymbolConfiguration *cfg =
+                      [UIImageSymbolConfiguration configurationWithPointSize:size weight:UIImageSymbolWeightBold];
+                  return [[img imageWithConfiguration:cfg] imageWithTintColor:color
+                                                             renderingMode:UIImageRenderingModeAlwaysOriginal];
+              }
+              return nil;
+          }
+          @end
 
-    UILabel *title = [[UILabel alloc] init];
-    title.text = @"QR Code / Preset Gần Nhất";
-    title.textColor = [VladUI neonWhite];
-    title.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:20];
-    title.textAlignment = NSTextAlignmentCenter;
-    title.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:title];
+          @interface VSPassthroughWindow : UIWindow
+          @end
+          @implementation VSPassthroughWindow
+          - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+              UIView *hit = [super hitTest:point withEvent:event];
+              if (hit == self || hit == self.rootViewController.view) return nil;
+              return hit;
+          }
+          @end
 
-    UIImageView *iv = [[UIImageView alloc] initWithImage:self.qrImage];
-    iv.contentMode = UIViewContentModeScaleAspectFit;
-    iv.layer.cornerRadius = 14; 
-    iv.clipsToBounds = YES;
-    iv.backgroundColor = [UIColor blackColor];
-    iv.layer.borderWidth = 1.5;
-    iv.layer.borderColor = [VladUI neonWhite].CGColor;
-    iv.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:iv];
+          static NSString *VladQRDir(void) {
+              static NSString *dir = nil;
+              static dispatch_once_t once;
+              dispatch_once(&once, ^{
+                  dir = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject
+                         stringByAppendingPathComponent:@"VladQR"];
+                  [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                                            withIntermediateDirectories:YES attributes:nil error:nil];
+              });
+              return dir;
+          }
 
-    UILabel *codeLbl = [[UILabel alloc] init];
-    codeLbl.text = self.qrCode.length > 0 ? self.qrCode : @"Mã Preset Vlad Video Star";
-    codeLbl.textColor = [UIColor colorWithWhite:0.75 alpha:1.0];
-    codeLbl.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
-    codeLbl.textAlignment = NSTextAlignmentCenter;
-    codeLbl.numberOfLines = 3;
-    codeLbl.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:codeLbl];
+          static void VladSaveQR(UIImage *img, NSString *code) {
+              if (!img) return;
+              gLastQRImage = img;
+              gLastQRCode = code;
+              dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
+                  NSData *data = UIImagePNGRepresentation(img);
+                  if (data) {
+                      [data writeToFile:[VladQRDir() stringByAppendingPathComponent:@"last_qr.png"] atomically:YES];
+                  }
+                  if (code) {
+                      [code writeToFile:[VladQRDir() stringByAppendingPathComponent:@"last_code.txt"]
+                               atomically:YES encoding:NSUTF8StringEncoding error:nil];
+                  }
+              });
+          }
 
-    UIStackView *stack = [[UIStackView alloc] init];
-    stack.axis = UILayoutConstraintAxisHorizontal;
-    stack.spacing = 14;
-    stack.distribution = UIStackViewDistributionFillEqually;
-    stack.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:stack];
+          static UIImage *VladLoadQRImage(void) {
+              if (gLastQRImage) return gLastQRImage;
+              NSString *path = [VladQRDir() stringByAppendingPathComponent:@"last_qr.png"];
+              if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
+                  gLastQRImage = [UIImage imageWithContentsOfFile:path];
+                  return gLastQRImage;
+              }
+              return nil;
+          }
 
-    [stack addArrangedSubview:[self btn:@"Lưu Ảnh" icon:@"square.and.arrow.down" action:@selector(saveTapped)]];
-    [stack addArrangedSubview:[self btn:@"Chia Sẻ" icon:@"square.and.arrow.up" action:@selector(shareTapped)]];
+          static NSString *VladLoadQRCode(void) {
+              if (gLastQRCode) return gLastQRCode;
+              NSString *path = [VladQRDir() stringByAppendingPathComponent:@"last_code.txt"];
+              if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
+                  gLastQRCode = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+                  return gLastQRCode;
+              }
+              return nil;
+          }
 
-    UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
-    [close setTitle:@"ĐÓNG" forState:UIControlStateNormal];
-    [close setTitleColor:[UIColor blackColor] forState:UIControlStateNormal];
-    close.backgroundColor = [VladUI neonWhite];
-    close.layer.cornerRadius = 22;
-    close.titleLabel.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:15];
-    close.translatesAutoresizingMaskIntoConstraints = NO;
-    [close addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:close];
+          static UIViewController *CurrentKeyVC(void) {
+              UIWindow *kw = nil;
+              if (@available(iOS 13.0, *)) {
+                  for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+                      if (s.activationState != UISceneActivationStateForegroundActive) continue;
+                      if ([s isKindOfClass:[UIWindowScene class]]) {
+                          for (UIWindow *w in ((UIWindowScene *)s).windows) {
+                              if (!w.hidden && w != gOverlayWindow && w.windowLevel == UIWindowLevelNormal) { kw = w; break; }
+                          }
+                      }
+                      if (kw) break;
+                  }
+              }
+              if (!kw) kw = [UIApplication sharedApplication].keyWindow;
+              return kw.rootViewController;
+          }
 
-    [NSLayoutConstraint activateConstraints:@[
-        [title.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:25],
-        [title.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:20],
-        [title.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-20],
-        
-        [iv.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:20],
-        [iv.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
-        [iv.widthAnchor constraintEqualToAnchor:self.view.widthAnchor multiplier:0.75],
-        [iv.heightAnchor constraintEqualToAnchor:iv.widthAnchor],
-        
-        [codeLbl.topAnchor constraintEqualToAnchor:iv.bottomAnchor constant:14],
-        [codeLbl.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:24],
-        [codeLbl.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-24],
-        
-        [stack.topAnchor constraintEqualToAnchor:codeLbl.bottomAnchor constant:20],
-        [stack.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:24],
-        [stack.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-24],
-        [stack.heightAnchor constraintEqualToConstant:48],
-        
-        [close.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:24],
-        [close.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-24],
-        [close.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-20],
-        [close.heightAnchor constraintEqualToConstant:44]
-    ]];
-}
+          @interface VladQRPreviewVC : UIViewController
+          @property (nonatomic, strong) UIImage *qrImage;
+          @property (nonatomic, copy)   NSString *qrCode;
+          @end
 
-- (UIButton *)btn:(NSString *)title icon:(NSString *)icon action:(SEL)action {
-    UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
-    [b setTitle:title forState:UIControlStateNormal];
-    [b setTitleColor:[VladUI neonWhite] forState:UIControlStateNormal];
-    [b setImage:[VladUI icon:icon size:18 color:[VladUI neonWhite]] forState:UIControlStateNormal];
-    b.tintColor = [VladUI neonWhite];
-    b.titleLabel.font = [UIFont boldSystemFontOfSize:14];
-    b.backgroundColor = [UIColor colorWithWhite:0.1 alpha:0.9];
-    b.layer.cornerRadius = 12;
-    b.layer.borderWidth = 1;
-    b.layer.borderColor = [UIColor colorWithWhite:0.3 alpha:0.6].CGColor;
-    [b addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
-    return b;
-}
+          @implementation VladQRPreviewVC
+          - (instancetype)initWithImage:(UIImage *)image code:(NSString *)code {
+              if (self = [super init]) {
+                  _qrImage = image; 
+                  _qrCode = code;
+                  self.modalPresentationStyle = UIModalPresentationOverFullScreen;
+              }
+              return self;
+          }
 
-- (void)saveTapped {
-    if (self.qrImage) {
-        UIImageWriteToSavedPhotosAlbum(self.qrImage, self, @selector(image:didFinishSavingWithError:context:), NULL);
-    }
-}
+          - (void)viewDidLoad {
+              [super viewDidLoad];
+              self.view.backgroundColor = [UIColor colorWithWhite:0.02 alpha:0.96];
 
-- (void)image:(UIImage *)image didFinishSavingWithError:(NSError *)error context:(void *)ctx {
-    NSString *msg = error ? @"Lưu thất bại!" : @"Đã lưu ảnh QR vào thư viện!";
-    UIAlertController *al = [UIAlertController alertControllerWithTitle:@"Thông báo" message:msg preferredStyle:UIAlertControllerStyleAlert];
-    [al addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-    [self presentViewController:al animated:YES completion:nil];
-}
+              UILabel *title = [[UILabel alloc] init];
+              title.text = @"QR Code / Preset Gần Nhất";
+              title.textColor = [VladUI neonWhite];
+              title.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:20];
+              title.textAlignment = NSTextAlignmentCenter;
+              title.translatesAutoresizingMaskIntoConstraints = NO;
+              [self.view addSubview:title];
 
-- (void)shareTapped {
-    if (self.qrImage) {
-        UIActivityViewController *av = [[UIActivityViewController alloc] initWithActivityItems:@[self.qrImage] applicationActivities:nil];
-        [self presentViewController:av animated:YES completion:nil];
-    }
-}
+              UIImageView *iv = [[UIImageView alloc] initWithImage:self.qrImage];
+              iv.contentMode = UIViewContentModeScaleAspectFit;
+              iv.layer.cornerRadius = 14; 
+              iv.clipsToBounds = YES;
+              iv.backgroundColor = [UIColor blackColor];
+              iv.layer.borderWidth = 1.5;
+              iv.layer.borderColor = [VladUI neonWhite].CGColor;
+              iv.translatesAutoresizingMaskIntoConstraints = NO;
+              [self.view addSubview:iv];
 
-- (void)closeTapped { [self dismissViewControllerAnimated:YES completion:nil]; }
-@end
+              UILabel *codeLbl = [[UILabel alloc] init];
+              codeLbl.text = self.qrCode.length > 0 ? self.qrCode : @"Mã Preset Vlad Video Star";
+              codeLbl.textColor = [UIColor colorWithWhite:0.75 alpha:1.0];
+              codeLbl.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+              codeLbl.textAlignment = NSTextAlignmentCenter;
+              codeLbl.numberOfLines = 3;
+              codeLbl.translatesAutoresizingMaskIntoConstraints = NO;
+              [self.view addSubview:codeLbl];
 
-// -------------------------------------------------------------
-// MENU CHÍNH VỚI THUẬT TOÁN TỐC ĐỘ CAO VÀ LỌC SẠCH LỚP TRỐNG
-// -------------------------------------------------------------
-@interface VladMenuView : UIView <PHPickerViewControllerDelegate>
-@property (nonatomic, strong) UIView *panel;
-@end
+              UIStackView *stack = [[UIStackView alloc] init];
+              stack.axis = UILayoutConstraintAxisHorizontal;
+              stack.spacing = 14;
+              stack.distribution = UIStackViewDistributionFillEqually;
+              stack.translatesAutoresizingMaskIntoConstraints = NO;
+              [self.view addSubview:stack];
 
-@implementation VladMenuView
-- (instancetype)initWithFrame:(CGRect)frame {
-    if (self = [super initWithFrame:frame]) {
-        self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.85];
-        [self addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(closeTapped)]];
+              [stack addArrangedSubview:[self btn:@"Lưu Ảnh" icon:@"square.and.arrow.down" action:@selector(saveTapped)]];
+              [stack addArrangedSubview:[self btn:@"Chia Sẻ" icon:@"square.and.arrow.up" action:@selector(shareTapped)]];
 
-        CGFloat sw = UIScreen.mainScreen.bounds.size.width;
-        CGFloat pw = MIN(320, sw - 40);
-        CGFloat ph = 350;
+              UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+              [close setTitle:@"ĐÓNG" forState:UIControlStateNormal];
+              [close setTitleColor:[UIColor blackColor] forState:UIControlStateNormal];
+              close.backgroundColor = [VladUI neonWhite];
+              close.layer.cornerRadius = 22;
+              close.titleLabel.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:15];
+              close.translatesAutoresizingMaskIntoConstraints = NO;
+              [close addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
+              [self.view addSubview:close];
 
-        self.panel = [[UIView alloc] initWithFrame:CGRectMake(0, 0, pw, ph)];
-        self.panel.center = self.center;
-        self.panel.backgroundColor = [VladUI neonBlackBg];
-        self.panel.layer.cornerRadius = 20;
-        self.panel.layer.borderWidth = 1.8;
-        self.panel.layer.borderColor = [VladUI neonWhite].CGColor;
-        [self.panel addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:nil action:nil]];
-        [self addSubview:self.panel];
+              [NSLayoutConstraint activateConstraints:@[
+                  [title.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:25],
+                  [title.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:20],
+                  [title.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-20],
+                  [iv.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:20],
+                  [iv.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
+                  [iv.widthAnchor constraintEqualToAnchor:self.view.widthAnchor multiplier:0.75],
+                  [iv.heightAnchor constraintEqualToAnchor:iv.widthAnchor],
+                  [codeLbl.topAnchor constraintEqualToAnchor:iv.bottomAnchor constant:14],
+                  [codeLbl.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:24],
+                  [codeLbl.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-24],
+                  [stack.topAnchor constraintEqualToAnchor:codeLbl.bottomAnchor constant:20],
+                  [stack.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:24],
+                  [stack.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-24],
+                  [stack.heightAnchor constraintEqualToConstant:48],
+                  [close.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:24],
+                  [close.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-24],
+                  [close.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-20],
+                  [close.heightAnchor constraintEqualToConstant:44]
+              ]];
+          }
 
-        UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(15, 20, pw-30, 26)];
-        title.text = @"Vlad Video Star Tool";
-        title.textColor = [VladUI neonWhite];
-        title.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:19];
-        title.textAlignment = NSTextAlignmentCenter;
-        [self.panel addSubview:title];
+          - (UIButton *)btn:(NSString *)title icon:(NSString *)icon action:(SEL)action {
+              UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
+              [b setTitle:title forState:UIControlStateNormal];
+              [b setTitleColor:[VladUI neonWhite] forState:UIControlStateNormal];
+              [b setImage:[VladUI icon:icon size:18 color:[VladUI neonWhite]] forState:UIControlStateNormal];
+              b.tintColor = [VladUI neonWhite];
+              b.titleLabel.font = [UIFont boldSystemFontOfSize:14];
+              b.backgroundColor = [UIColor colorWithWhite:0.1 alpha:0.9];
+              b.layer.cornerRadius = 12;
+              b.layer.borderWidth = 1;
+              b.layer.borderColor = [UIColor colorWithWhite:0.3 alpha:0.6].CGColor;
+              [b addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+              return b;
+          }
 
-        UILabel *subtitle = [[UILabel alloc] initWithFrame:CGRectMake(15, 48, pw-30, 16)];
-        subtitle.text = @"Owner & Developer - Vlad";
-        subtitle.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
-        subtitle.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
-        subtitle.textAlignment = NSTextAlignmentCenter;
-        [self.panel addSubview:subtitle];
+          - (void)saveTapped {
+              if (self.qrImage) {
+                  UIImageWriteToSavedPhotosAlbum(self.qrImage, self, @selector(image:didFinishSavingWithError:context:), NULL);
+              }
+          }
 
-        UIButton *close = [UIButton buttonWithType:UIButtonTypeCustom];
-        close.frame = CGRectMake(pw-38, 14, 30, 30);
-        [close setImage:[VladUI icon:@"xmark.circle.fill" size:22 color:[UIColor colorWithWhite:0.5 alpha:1.0]] forState:UIControlStateNormal];
-        [close addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
-        [self.panel addSubview:close];
+          - (void)image:(UIImage *)image didFinishSavingWithError:(NSError *)error context:(void *)ctx {
+              NSString *msg = error ? @"Lưu thất bại!" : @"Đã lưu ảnh QR vào thư viện!";
+              UIAlertController *al = [UIAlertController alertControllerWithTitle:@"Thông báo" message:msg preferredStyle:UIAlertControllerStyleAlert];
+              [al addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+              [self presentViewController:al animated:YES completion:nil];
+          }
 
-        NSArray *titles = @[@"Xem Code Gần Nhất", @"Tự Động Nhập Ảnh", @"Tự Động Chia Beat"];
-        NSArray *icons = @[@"qrcode.viewfinder", @"photo.on.rectangle.angled", @"waveform.path.ecg"];
-        
-        CGFloat bh = 54, gap = 12, startY = 80;
-        for (int i=0; i<3; i++) {
-            UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
-            btn.frame = CGRectMake(20, startY + i*(bh+gap), pw-40, bh);
-            btn.backgroundColor = [UIColor colorWithWhite:0.09 alpha:1.0];
-            btn.layer.cornerRadius = 12;
-            btn.layer.borderWidth = 1.2;
-            btn.layer.borderColor = [UIColor colorWithWhite:0.25 alpha:1.0].CGColor;
-            btn.tag = i;
+          - (void)shareTapped {
+              if (self.qrImage) {
+                  UIActivityViewController *av = [[UIActivityViewController alloc] initWithActivityItems:@[self.qrImage] applicationActivities:nil];
+                  [self presentViewController:av animated:YES completion:nil];
+              }
+          }
 
-            UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake(14, 15, 24, 24)];
-            iv.image = [VladUI icon:icons[i] size:22 color:[VladUI neonWhite]];
-            [btn addSubview:iv];
+          - (void)closeTapped { [self dismissViewControllerAnimated:YES completion:nil]; }
+          @end
 
-            UILabel *tl = [[UILabel alloc] initWithFrame:CGRectMake(50, 15, btn.frame.size.width-60, 24)];
-            tl.text = titles[i];
-            tl.textColor = [VladUI neonWhite];
-            tl.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:14];
-            tl.userInteractionEnabled = NO;
-            [btn addSubview:tl];
+          @interface VladMenuView : UIView <PHPickerViewControllerDelegate>
+          @property (nonatomic, strong) UIView *panel;
+          @end
 
-            [btn addTarget:self action:@selector(funcTapped:) forControlEvents:UIControlEventTouchUpInside];
-            [self.panel addSubview:btn];
-        }
-    }
-    return self;
-}
+          @implementation VladMenuView
+          - (instancetype)initWithFrame:(CGRect)frame {
+              if (self = [super initWithFrame:frame]) {
+                  self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.85];
+                  [self addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(closeTapped)]];
 
-- (UIViewController *)presentingVC {
-    UIWindow *kw = nil;
-    if (@available(iOS 13.0, *)) {
-        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-            if (s.activationState != UISceneActivationStateForegroundActive) continue;
-            if ([s isKindOfClass:[UIWindowScene class]]) {
-                for (UIWindow *w in ((UIWindowScene *)s).windows) {
-                    if (!w.hidden && w != gOverlayWindow) { kw = w; break; }
-                }
-            }
-            if (kw) break;
-        }
-    }
-    if (!kw) kw = [UIApplication sharedApplication].keyWindow;
-    if (!kw && gOverlayWindow) kw = gOverlayWindow;
-    UIViewController *vc = kw.rootViewController;
-    while (vc.presentedViewController) vc = vc.presentedViewController;
-    return vc;
-}
+                  CGFloat sw = UIScreen.mainScreen.bounds.size.width;
+                  CGFloat pw = MIN(320, sw - 40);
+                  CGFloat ph = 350;
 
-- (void)showAlert:(NSString *)title msg:(NSString *)msg {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        UIAlertController *al = [UIAlertController alertControllerWithTitle:title message:msg preferredStyle:UIAlertControllerStyleAlert];
-        [al addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-        UIViewController *p = [self presentingVC];
-        if (p) [p presentViewController:al animated:YES completion:nil];
-    });
-}
+                  self.panel = [[UIView alloc] initWithFrame:CGRectMake(0, 0, pw, ph)];
+                  self.panel.center = self.center;
+                  self.panel.backgroundColor = [VladUI neonBlackBg];
+                  self.panel.layer.cornerRadius = 20;
+                  self.panel.layer.borderWidth = 1.8;
+                  self.panel.layer.borderColor = [VladUI neonWhite].CGColor;
+                  [self.panel addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:nil action:nil]];
+                  [self addSubview:self.panel];
 
-- (void)funcTapped:(UIButton *)sender {
-    if (sender.tag == 0) {
-        // [CHỨC NĂNG 1] Xem Code Gần Nhất (Load instantly từ cache)
-        gLastQRImage = VladLoadQRImage();
-        gLastQRCode = VladLoadQRCode();
-        if (!gLastQRImage) {
-            [self showAlert:@"Chưa Có Code" msg:@"Chưa có mã QR/Preset nào được quét hoặc sử dụng gần đây."];
-            return;
-        }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            VladQRPreviewVC *vc = [[VladQRPreviewVC alloc] initWithImage:gLastQRImage code:gLastQRCode];
-            UIViewController *p = [self presentingVC];
-            if (p) [p presentViewController:vc animated:YES completion:nil];
-        });
-    } else if (sender.tag == 1) {
-        // [CHỨC NĂNG 2] Tự Động Nhập Ảnh (Mở bộ chọn ảnh tốc độ cao)
-        if (@available(iOS 14, *)) {
-            PHPickerConfiguration *config = [[PHPickerConfiguration alloc] initWithPhotoLibrary:[PHPhotoLibrary sharedPhotoLibrary]];
-            config.selectionLimit = 40; 
-            config.filter = PHPickerFilter.images;
-            PHPickerViewController *picker = [[PHPickerViewController alloc] initWithConfiguration:config];
-            picker.delegate = (id<PHPickerViewControllerDelegate>)self;
-            
-            UIViewController *p = [self presentingVC];
-            if (p) [p presentViewController:picker animated:YES completion:nil];
-        } else {
-            [self showAlert:@"Thông báo" msg:@"Yêu cầu iOS 14 trở lên."];
-        }
-    } else if (sender.tag == 2) {
-        // [CHỨC NĂNG 3] Tự Động Chia Beat qua SceneSplitter
-        Class splitterClass = NSClassFromString(@"SceneSplitter") ?: NSClassFromString(@"Video_Star.SceneSplitter");
-        if (splitterClass) {
-            @try {
-                id splitter = [[splitterClass alloc] init];
-                if (splitter && [splitter respondsToSelector:@selector(splitScenes)]) {
-                    ((void (*)(id, SEL))objc_msgSend)(splitter, @selector(splitScenes));
-                }
-            } @catch (NSException *e) {}
-        }
-        [self showAlert:@"Tự Động Chia Beat" msg:@"Đã kích hoạt SceneSplitter tự động phân tích nhạc và chia mốc beat thành công!"];
-    }
-}
+                  UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(15, 20, pw-30, 26)];
+                  title.text = @"Vlad Video Star Tool";
+                  title.textColor = [VladUI neonWhite];
+                  title.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:19];
+                  title.textAlignment = NSTextAlignmentCenter;
+                  [self.panel addSubview:title];
 
-// Xử lý nạp ảnh chạy ngầm hoàn toàn, tối ưu hóa tốc độ cực đỉnh, LOẠI BỎ HOÀN TOÀN LỚP TRỐNG, LỚP MÀU, LỚP HIỆU ỨNG
-- (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
-    [picker dismissViewControllerAnimated:YES completion:nil];
-    if (results.count == 0) return;
-    
-    // Xử lý load ảnh đa luồng ngầm (Background thread) để chống giật lag app tuyệt đối
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-        NSMutableArray *selectedImages = [NSMutableArray array];
-        dispatch_group_t group = dispatch_group_create();
-        
-        for (PHPickerResult *res in results) {
-            if ([res.itemProvider canLoadObjectOfClass:[UIImage class]]) {
-                dispatch_group_enter(group);
-                [res.itemProvider loadObjectOfClass:[UIImage class] completionHandler:^(__kindof id<NSItemProviderReading>  _Nullable object, NSError * _Nullable error) {
-                    if ([object isKindOfClass:[UIImage class]]) {
-                        [selectedImages addObject:(UIImage *)object];
-                    }
-                    dispatch_group_leave(group);
-                }];
-            }
-        }
-        
-        dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
-        
-        if (selectedImages.count == 0) return;
-        
-        // Cập nhật giao diện và nạp vào layer trên main thread với tốc độ tối tân
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (!gCurrentEditor) {
-                [self showAlert:@"Chưa Mở Editor" msg:@"Hãy vào giao diện MultiLayer/Editor trước khi bấm nhập ảnh."];
-                return;
-            }
-            
-            @try {
-                id engine = nil;
-                if ([gCurrentEditor respondsToSelector:@selector(engine)])
-                    engine = ((id (*)(id, SEL))objc_msgSend)(gCurrentEditor, @selector(engine));
-                
-                NSArray *layers = nil;
-                if ([engine respondsToSelector:@selector(masterLayers)])
-                    layers = ((id (*)(id, SEL))objc_msgSend)(engine, @selector(masterLayers));
-                
-                if (!layers || layers.count == 0) {
-                    [self showAlert:@"Thông báo" msg:@"Không tìm thấy danh sách lớp (layers) trong dự án hiện tại."];
-                    return;
-                }
-                
-                int imgIdx = 0;
-                int filledCount = 0;
-                for (id layer in layers) {
-                    if (!layer) continue;
-                    NSString *clsName = NSStringFromClass([layer class]);
-                    
-                    // LỌC BỎ CHÍNH XÁC: Tuyệt đối bỏ qua lớp trống (Empty/Blank), lớp màu (Color), lớp hiệu ứng (Effect/Wiz/Adjust/Filter)
-                    if ([clsName containsString:@"Blank"] || 
-                        [clsName containsString:@"Empty"] || 
-                        [clsName containsString:@"Color"] || 
-                        [clsName containsString:@"Effect"] || 
-                        [clsName containsString:@"Wiz"] ||
-                        [clsName containsString:@"Adjust"] ||
-                        [clsName containsString:@"Filter"]) {
-                        continue;
-                    }
-                    
-                    // Kiểm tra sâu nếu lớp có hàm trả về trống/không hỗ trợ
-                    BOOL isEmptyLayer = NO;
-                    @try {
-                        if ([layer respondsToSelector:@selector(isEmpty)]) {
-                            isEmptyLayer = ((BOOL (*)(id, SEL))objc_msgSend)(layer, @selector(isEmpty));
-                        }
-                    } @catch (NSException *e) {}
-                    
-                    if (isEmptyLayer) continue;
-                    
-                    UIImage *imgToApply = selectedImages[imgIdx % selectedImages.count];
-                    imgIdx++;
-                    filledCount++;
-                    
-                    @try {
-                        if ([layer respondsToSelector:@selector(setImage:)]) {
-                            ((void (*)(id, SEL, id))objc_msgSend)(layer, @selector(setImage:), imgToApply);
-                        } else if ([layer respondsToSelector:@selector(setImageGenerator:)]) {
-                            id gen = ((id (*)(id, SEL))objc_msgSend)(layer, @selector(imageGenerator));
-                            [gen setValue:imgToApply forKey:@"layerImage"];
-                        }
-                    } @catch (NSException *e) {}
-                }
-                
-                if ([gCurrentEditor respondsToSelector:@selector(updatePreview)]) {
-                    ((void (*)(id, SEL))objc_msgSend)(gCurrentEditor, @selector(updatePreview));
-                }
-                
-                [self showAlert:@"Thành Công" msg:[NSString stringWithFormat:@"Đã tự động nạp %d ảnh vào các lớp hợp lệ (đã lọc sạch hoàn toàn lớp trống, lớp màu và lớp hiệu ứng)!", filledCount]];
-            } @catch (NSException *e) {
-                [self showAlert:@"Lỗi" msg:@"Đã xảy ra lỗi khi nạp ảnh vào Editor."];
-            }
-        });
-    });
-}
+                  UILabel *subtitle = [[UILabel alloc] initWithFrame:CGRectMake(15, 48, pw-30, 16)];
+                  subtitle.text = @"Owner & Developer - Vlad";
+                  subtitle.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
+                  subtitle.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
+                  subtitle.textAlignment = NSTextAlignmentCenter;
+                  [self.panel addSubview:subtitle];
 
-- (void)closeTapped { [self removeFromSuperview]; }
-@end
+                  UIButton *close = [UIButton buttonWithType:UIButtonTypeCustom];
+                  close.frame = CGRectMake(pw-38, 14, 30, 30);
+                  [close setImage:[VladUI icon:@"xmark.circle.fill" size:22 color:[UIColor colorWithWhite:0.5 alpha:1.0]] forState:UIControlStateNormal];
+                  [close addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
+                  [self.panel addSubview:close];
 
-@interface VladLogoView : UIView
-@end
-@implementation VladLogoView
-- (instancetype)initWithFrame:(CGRect)frame {
-    if (self = [super initWithFrame:frame]) {
-        self.backgroundColor = [UIColor colorWithRed:0.04 green:0.04 blue:0.04 alpha:0.98];
-        self.layer.cornerRadius = frame.size.width/2;
-        self.layer.borderWidth = 1.8;
-        self.layer.borderColor = [VladUI neonWhite].CGColor;
+                  NSArray *titles = @[@"Xem Code Gần Nhất", @"Tự Động Nhập Ảnh", @"Tự Động Chia Beat"];
+                  NSArray *icons = @[@"qrcode.viewfinder", @"photo.on.rectangle.angled", @"waveform.path.ecg"];
+                  
+                  CGFloat bh = 54, gap = 12, startY = 80;
+                  for (int i=0; i<3; i++) {
+                      UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
+                      btn.frame = CGRectMake(20, startY + i*(bh+gap), pw-40, bh);
+                      btn.backgroundColor = [UIColor colorWithWhite:0.09 alpha:1.0];
+                      btn.layer.cornerRadius = 12;
+                      btn.layer.borderWidth = 1.2;
+                      btn.layer.borderColor = [UIColor colorWithWhite:0.25 alpha:1.0].CGColor;
+                      btn.tag = i;
 
-        UILabel *lbl = [[UILabel alloc] initWithFrame:self.bounds];
-        lbl.text = @"V";
-        lbl.textColor = [VladUI neonWhite];
-        lbl.textAlignment = NSTextAlignmentCenter;
-        lbl.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:26];
-        [self addSubview:lbl];
+                      UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake(14, 15, 24, 24)];
+                      iv.image = [VladUI icon:icons[i] size:22 color:[VladUI neonWhite]];
+                      [btn addSubview:iv];
 
-        [self addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap)]];
-        [self addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)]];
-    }
-    return self;
-}
-- (void)handleTap {
-    if (!gOverlayWindow) return;
-    UIView *root = gOverlayWindow.rootViewController.view;
-    for (UIView *v in root.subviews) if ([v isKindOfClass:[VladMenuView class]]) return;
-    [root addSubview:[[VladMenuView alloc] initWithFrame:root.bounds]];
-}
-- (void)handlePan:(UIPanGestureRecognizer * _Nonnull)pan {
-    CGPoint t = [pan translationInView:self.superview];
-    self.center = CGPointMake(self.center.x + t.x, self.center.y + t.y);
-    [pan setTranslation:CGPointZero inView:self.superview];
-}
-@end
+                      UILabel *tl = [[UILabel alloc] initWithFrame:CGRectMake(50, 15, btn.frame.size.width-60, 24)];
+                      tl.text = titles[i];
+                      tl.textColor = [VladUI neonWhite];
+                      tl.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:14];
+                      tl.userInteractionEnabled = NO;
+                      [btn addSubview:tl];
 
-// Hook ViewController & Hiển thị thông báo chào mừng Pro khi vào app
-@interface UIViewController (VladHook)
-- (void)vlad_viewDidLoad;
-@end
-@implementation UIViewController (VladHook)
-- (void)vlad_viewDidLoad {
-    [self vlad_viewDidLoad];
-    NSString *cls = NSStringFromClass([self class]);
-    if ([cls containsString:@"Editor"] || [cls containsString:@"MultiLayer"] || [cls containsString:@"Wiz"] || [cls containsString:@"Project"]) {
-        gCurrentEditor = self;
-    }
-    
-    if (!gHasShownWelcomeAlert) {
-        gHasShownWelcomeAlert = YES;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            UIViewController *rootVC = CurrentKeyVC();
-            if (rootVC) {
-                UIAlertController *welcomeAlert = [UIAlertController alertControllerWithTitle:@"Chào Mừng Đến Với\nVlad Video Star Tool" 
-                                                                                       message:@"Chúc Bạn Có Một Trải Nghiệm Tuyệt Vời\n\nTool Đã Tự Động Mở Khoá Toàn Bộ Chức Năng Pro Giúp Bạn" 
-                                                                                preferredStyle:UIAlertControllerStyleAlert];
-                [welcomeAlert addAction:[UIAlertAction actionWithTitle:@"Bắt Đầu Ngay" style:UIAlertActionStyleDefault handler:nil]];
-                [rootVC presentViewController:welcomeAlert animated:YES completion:nil];
-            }
-        });
-    }
-}
-@end
+                      [btn addTarget:self action:@selector(funcTapped:) forControlEvents:UIControlEventTouchUpInside];
+                      [self.panel addSubview:btn];
+                  }
+              }
+              return self;
+          }
 
-static void TrySetupOverlay(void) {
-    if (gOverlayInitialized) return;
-    UIWindow *keyWin = nil;
-    UIWindowScene *activeScene = nil;
-    if (@available(iOS 13.0, *)) {
-        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-            if (s.activationState != UISceneActivationStateForegroundActive) continue;
-            if ([s isKindOfClass:[UIWindowScene class]]) {
-                activeScene = (UIWindowScene *)s;
-                for (UIWindow *w in activeScene.windows) {
-                    if (!w.hidden && w.windowLevel == UIWindowLevelNormal) { keyWin = w; break; }
-                }
-                if (keyWin) break;
-            }
-        }
-    }
-    if (!keyWin) keyWin = [UIApplication sharedApplication].keyWindow;
-    if (!keyWin) return;
+          - (UIViewController *)presentingVC {
+              UIWindow *kw = nil;
+              if (@available(iOS 13.0, *)) {
+                  for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+                      if (s.activationState != UISceneActivationStateForegroundActive) continue;
+                      if ([s isKindOfClass:[UIWindowScene class]]) {
+                          for (UIWindow *w in ((UIWindowScene *)s).windows) {
+                              if (!w.hidden && w != gOverlayWindow) { kw = w; break; }
+                          }
+                      }
+                      if (kw) break;
+                  }
+              }
+              if (!kw) kw = [UIApplication sharedApplication].keyWindow;
+              if (!kw && gOverlayWindow) kw = gOverlayWindow;
+              UIViewController *vc = kw.rootViewController;
+              while (vc.presentedViewController) vc = vc.presentedViewController;
+              return vc;
+          }
 
-    if (activeScene) {
-        gOverlayWindow = [[VSPassthroughWindow alloc] initWithWindowScene:activeScene];
-    } else {
-        gOverlayWindow = [[VSPassthroughWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-    }
-    gOverlayWindow.windowLevel = UIWindowLevelAlert + 10;
-    gOverlayWindow.backgroundColor = [UIColor clearColor];
-    gOverlayWindow.rootViewController = [[UIViewController alloc] init];
-    gOverlayWindow.rootViewController.view.backgroundColor = [UIColor clearColor];
-    gOverlayWindow.hidden = NO;
+          - (void)showAlert:(NSString *)title msg:(NSString *)msg {
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  UIAlertController *al = [UIAlertController alertControllerWithTitle:title message:msg preferredStyle:UIAlertControllerStyleAlert];
+                  [al addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                  UIViewController *p = [self presentingVC];
+                  if (p) [p presentViewController:al animated:YES completion:nil];
+              });
+          }
 
-    CGFloat sw = [UIScreen mainScreen].bounds.size.width;
-    VladLogoView *logo = [[VladLogoView alloc] initWithFrame:CGRectMake(sw-66, 120, 50, 50)];
-    [gOverlayWindow.rootViewController.view addSubview:logo];
-    gOverlayInitialized = YES;
-}
+          - (void)funcTapped:(UIButton *)sender {
+              if (sender.tag == 0) {
+                  gLastQRImage = VladLoadQRImage();
+                  gLastQRCode = VladLoadQRCode();
+                  if (!gLastQRImage) {
+                      [self showAlert:@"Chưa Có Code" msg:@"Chưa có mã QR/Preset nào được quét hoặc sử dụng gần đây."];
+                      return;
+                  }
+                  dispatch_async(dispatch_get_main_queue(), ^{
+                      VladQRPreviewVC *vc = [[VladQRPreviewVC alloc] initWithImage:gLastQRImage code:gLastQRCode];
+                      UIViewController *p = [self presentingVC];
+                      if (p) [p presentViewController:vc animated:YES completion:nil];
+                  });
+              } else if (sender.tag == 1) {
+                  if (@available(iOS 14, *)) {
+                      PHPickerConfiguration *config = [[PHPickerConfiguration alloc] initWithPhotoLibrary:[PHPhotoLibrary sharedPhotoLibrary]];
+                      config.selectionLimit = 40; 
+                      config.filter = PHPickerFilter.images;
+                      PHPickerViewController *picker = [[PHPickerViewController alloc] initWithConfiguration:config];
+                      picker.delegate = (id<PHPickerViewControllerDelegate>)self;
+                      
+                      UIViewController *p = [self presentingVC];
+                      if (p) [p presentViewController:picker animated:YES completion:nil];
+                  } else {
+                      [self showAlert:@"Thông báo" msg:@"Yêu cầu iOS 14 trở lên."];
+                  }
+              } else if (sender.tag == 2) {
+                  Class splitterClass = NSClassFromString(@"SceneSplitter") ?: NSClassFromString(@"Video_Star.SceneSplitter");
+                  if (splitterClass) {
+                      @try {
+                          id splitter = [[splitterClass alloc] init];
+                          if (splitter && [splitter respondsToSelector:@selector(splitScenes)]) {
+                              ((void (*)(id, SEL))objc_msgSend)(splitter, @selector(splitScenes));
+                          }
+                      } @catch (NSException *e) {}
+                  }
+                  [self showAlert:@"Tự Động Chia Beat" msg:@"Đã kích hoạt SceneSplitter tự động phân tích nhạc và chia mốc beat thành công!"];
+              }
+          }
 
-static void RetryOverlaySetup(int attempt) {
-    if (gOverlayInitialized || attempt > 20) return;
-    TrySetupOverlay();
-    if (!gOverlayInitialized) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ RetryOverlaySetup(attempt + 1); });
-    }
-}
+          - (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
+              [picker dismissViewControllerAnimated:YES completion:nil];
+              if (results.count == 0) return;
+              
+              dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+                  NSMutableArray *selectedImages = [NSMutableArray array];
+                  dispatch_group_t group = dispatch_group_create();
+                  
+                  for (PHPickerResult *res in results) {
+                      if ([res.itemProvider canLoadObjectOfClass:[UIImage class]]) {
+                          dispatch_group_enter(group);
+                          [res.itemProvider loadObjectOfClass:[UIImage class] completionHandler:^(__kindof id<NSItemProviderReading>  _Nullable object, NSError * _Nullable error) {
+                              if ([object isKindOfClass:[UIImage class]]) {
+                                  [selectedImages addObject:(UIImage *)object];
+                              }
+                              dispatch_group_leave(group);
+                          }];
+                      }
+                  }
+                  
+                  dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
+                  
+                  if (selectedImages.count == 0) return;
+                  
+                  dispatch_async(dispatch_get_main_queue(), ^{
+                      if (!gCurrentEditor) {
+                          [self showAlert:@"Chưa Mở Editor" msg:@"Hãy vào giao diện MultiLayer/Editor trước khi bấm nhập ảnh."];
+                          return;
+                      }
+                      
+                      @try {
+                          id engine = nil;
+                          if ([gCurrentEditor respondsToSelector:@selector(engine)])
+                              engine = ((id (*)(id, SEL))objc_msgSend)(gCurrentEditor, @selector(engine));
+                          
+                          NSArray *layers = nil;
+                          if ([engine respondsToSelector:@selector(masterLayers)])
+                              layers = ((id (*)(id, SEL))objc_msgSend)(engine, @selector(masterLayers));
+                          
+                          if (!layers || layers.count == 0) {
+                              [self showAlert:@"Thông báo" msg:@"Không tìm thấy danh sách lớp (layers) trong dự án hiện tại."];
+                              return;
+                          }
+                          
+                          int imgIdx = 0;
+                          int filledCount = 0;
+                          for (id layer in layers) {
+                              if (!layer) continue;
+                              NSString *clsName = NSStringFromClass([layer class]);
+                              
+                              if ([clsName containsString:@"Blank"] || 
+                                  [clsName containsString:@"Empty"] || 
+                                  [clsName containsString:@"Color"] || 
+                                  [clsName containsString:@"Effect"] || 
+                                  [clsName containsString:@"Wiz"] ||
+                                  [clsName containsString:@"Adjust"] ||
+                                  [clsName containsString:@"Filter"]) {
+                                  continue;
+                              }
+                              
+                              BOOL isEmptyLayer = NO;
+                              @try {
+                                  if ([layer respondsToSelector:@selector(isEmpty)]) {
+                                      isEmptyLayer = ((BOOL (*)(id, SEL))objc_msgSend)(layer, @selector(isEmpty));
+                                  }
+                              } @catch (NSException *e) {}
+                              
+                              if (isEmptyLayer) continue;
+                              
+                              UIImage *imgToApply = selectedImages[imgIdx % selectedImages.count];
+                              imgIdx++;
+                              filledCount++;
+                              
+                              @try {
+                                  if ([layer respondsToSelector:@selector(setImage:)]) {
+                                      ((void (*)(id, SEL, id))objc_msgSend)(layer, @selector(setImage:), imgToApply);
+                                  } else if ([layer respondsToSelector:@selector(setImageGenerator:)]) {
+                                      id gen = ((id (*)(id, SEL))objc_msgSend)(layer, @selector(imageGenerator));
+                                      [gen setValue:imgToApply forKey:@"layerImage"];
+                                  }
+                              } @catch (NSException *e) {}
+                          }
+                          
+                          if ([gCurrentEditor respondsToSelector:@selector(updatePreview)]) {
+                              ((void (*)(id, SEL))objc_msgSend)(gCurrentEditor, @selector(updatePreview));
+                          }
+                          
+                          [self showAlert:@"Thành Công" msg:[NSString stringWithFormat:@"Đã tự động nạp %d ảnh vào các lớp hợp lệ (đã lọc sạch hoàn toàn lớp trống, lớp màu và lớp hiệu ứng)!", filledCount]];
+                      } @catch (NSException *e) {
+                          [self showAlert:@"Lỗi" msg:@"Đã xảy ra lỗi khi nạp ảnh vào Editor."];
+                      }
+                  });
+              });
+          }
 
-// Bẫy QR Code thực tế khi quét mã trong app
-static void (*orig_QRCodeSelected)(id, SEL, id, NSData *) = NULL;
-static void hook_QRCodeSelected(id self, SEL _cmd, id arg1, NSData *data) {
-    if (orig_QRCodeSelected) orig_QRCodeSelected(self, _cmd, arg1, data);
-    if (data && data.length > 0) {
-        UIImage *img = [UIImage imageWithData:data];
-        if (img) {
-            NSString *cs = nil;
-            @try { cs = [NSString stringWithFormat:@"%@", arg1]; } @catch (NSException *e) {}
-            VladSaveQR(img, cs ? cs : @"Vlad QR Preset Code");
-        }
-    }
-}
+          - (void)closeTapped { [self removeFromSuperview]; }
+          @end
 
-__attribute__((constructor))
-static void initVlad(void) {
-    @autoreleasepool {
-        // Cài đặt bộ bẫy ngoại lệ chống crash toàn cục
-        NSSetUncaughtExceptionHandler(&VladUncaughtExceptionHandler);
-        
-        Method o1 = class_getInstanceMethod([UIViewController class], @selector(viewDidLoad));
-        Method n1 = class_getInstanceMethod([UIViewController class], @selector(vlad_viewDidLoad));
-        if (o1 && n1) method_exchangeImplementations(o1, n1);
+          @interface VladLogoView : UIView
+          @end
+          @implementation VladLogoView
+          - (instancetype)initWithFrame:(CGRect)frame {
+              if (self = [super initWithFrame:frame]) {
+                  self.backgroundColor = [UIColor colorWithRed:0.04 green:0.04 blue:0.04 alpha:0.98];
+                  self.layer.cornerRadius = frame.size.width/2;
+                  self.layer.borderWidth = 1.8;
+                  self.layer.borderColor = [VladUI neonWhite].CGColor;
 
-        Class qrClass = NSClassFromString(@"QRCodeManager");
-        if (qrClass) {
-            SEL sel = sel_registerName("selectedCode:withImageData:");
-            Method m = class_getInstanceMethod(qrClass, sel);
-            if (m) {
-                orig_QRCodeSelected = reinterpret_cast<void (*)(id, SEL, id, NSData *)>(method_getImplementation(m));
-                method_setImplementation(m, (IMP)hook_QRCodeSelected);
-            }
-        }
+                  UILabel *lbl = [[UILabel alloc] initWithFrame:self.bounds];
+                  lbl.text = @"V";
+                  lbl.textColor = [VladUI neonWhite];
+                  lbl.textAlignment = NSTextAlignmentCenter;
+                  lbl.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:26];
+                  [self addSubview:lbl];
 
-        gLastQRImage = VladLoadQRImage();
-        gLastQRCode = VladLoadQRCode();
+                  [self addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap)]];
+                  [self addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)]];
+              }
+              return self;
+          }
+          - (void)handleTap {
+              if (!gOverlayWindow) return;
+              UIView *root = gOverlayWindow.rootViewController.view;
+              for (UIView *v in root.subviews) if ([v isKindOfClass:[VladMenuView class]]) return;
+              [root addSubview:[[VladMenuView alloc] initWithFrame:root.bounds]];
+          }
+          - (void)handlePan:(UIPanGestureRecognizer * _Nonnull)pan {
+              CGPoint t = [pan translationInView:self.superview];
+              self.center = CGPointMake(self.center.x + t.x, self.center.y + t.y);
+              [pan setTranslation:CGPointZero inView:self.superview];
+          }
+          @end
 
-        dispatch_async(dispatch_get_main_queue(), ^{ RetryOverlaySetup(0); });
-    }
-}
+          @interface UIViewController (VladHook)
+          - (void)vlad_viewDidLoad;
+          @end
+          @implementation UIViewController (VladHook)
+          - (void)vlad_viewDidLoad {
+              [self vlad_viewDidLoad];
+              NSString *cls = NSStringFromClass([self class]);
+              if ([cls containsString:@"Editor"] || [cls containsString:@"MultiLayer"] || [cls containsString:@"Wiz"] || [cls containsString:@"Project"]) {
+                  gCurrentEditor = self;
+              }
+              
+              if (!gHasShownWelcomeAlert) {
+                  gHasShownWelcomeAlert = YES;
+                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                      UIViewController *rootVC = CurrentKeyVC();
+                      if (rootVC) {
+                          UIAlertController *welcomeAlert = [UIAlertController alertControllerWithTitle:@"Chào Mừng Đến Với\nVlad Video Star Tool" 
+                                                                                                 message:@"Chúc Bạn Có Một Trải Nghiệm Tuyệt Vời\n\nTool Đã Tự Động Mở Khoá Toàn Bộ Chức Năng Pro Giúp Bạn" 
+                                                                                          preferredStyle:UIAlertControllerStyleAlert];
+                          [welcomeAlert addAction:[UIAlertAction actionWithTitle:@"Bắt Đầu Ngay" style:UIAlertActionStyleDefault handler:nil]];
+                          [rootVC presentViewController:welcomeAlert animated:YES completion:nil];
+                      }
+                  });
+              }
+          }
+          @end
+
+          static void TrySetupOverlay(void) {
+              if (gOverlayInitialized) return;
+              UIWindow *keyWin = nil;
+              UIWindowScene *activeScene = nil;
+              if (@available(iOS 13.0, *)) {
+                  for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+                      if (s.activationState != UISceneActivationStateForegroundActive) continue;
+                      if ([s isKindOfClass:[UIWindowScene class]]) {
+                          activeScene = (UIWindowScene *)s;
+                          for (UIWindow *w in activeScene.windows) {
+                              if (!w.hidden && w.windowLevel == UIWindowLevelNormal) { keyWin = w; break; }
+                          }
+                          if (keyWin) break;
+                      }
+                  }
+              }
+              if (!keyWin) keyWin = [UIApplication sharedApplication].keyWindow;
+              if (!keyWin) return;
+
+              if (activeScene) {
+                  gOverlayWindow = [[VSPassthroughWindow alloc] initWithWindowScene:activeScene];
+              } else {
+                  gOverlayWindow = [[VSPassthroughWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+              }
+              gOverlayWindow.windowLevel = UIWindowLevelAlert + 10;
+              gOverlayWindow.backgroundColor = [UIColor clearColor];
+              gOverlayWindow.rootViewController = [[UIViewController alloc] init];
+              gOverlayWindow.rootViewController.view.backgroundColor = [UIColor clearColor];
+              gOverlayWindow.hidden = NO;
+
+              CGFloat sw = [UIScreen mainScreen].bounds.size.width;
+              VladLogoView *logo = [[VladLogoView alloc] initWithFrame:CGRectMake(sw-66, 120, 50, 50)];
+              [gOverlayWindow.rootViewController.view addSubview:logo];
+              gOverlayInitialized = YES;
+          }
+
+          static void RetryOverlaySetup(int attempt) {
+              if (gOverlayInitialized || attempt > 20) return;
+              TrySetupOverlay();
+              if (!gOverlayInitialized) {
+                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
+                                 dispatch_get_main_queue(), ^{ RetryOverlaySetup(attempt + 1); });
+              }
+          }
+
+          static void (*orig_QRCodeSelected)(id, SEL, id, NSData *) = NULL;
+          static void hook_QRCodeSelected(id self, SEL _cmd, id arg1, NSData *data) {
+              if (orig_QRCodeSelected) orig_QRCodeSelected(self, _cmd, arg1, data);
+              if (data && data.length > 0) {
+                  UIImage *img = [UIImage imageWithData:data];
+                  if (img) {
+                      NSString *cs = nil;
+                      @try { cs = [NSString stringWithFormat:@"%@", arg1]; } @catch (NSException *e) {}
+                      VladSaveQR(img, cs ? cs : @"Vlad QR Preset Code");
+                  }
+              }
+          }
+
+          __attribute__((constructor))
+          static void initVlad(void) {
+              @autoreleasepool {
+                  NSSetUncaughtExceptionHandler(&VladUncaughtExceptionHandler);
+                  
+                  Method o1 = class_getInstanceMethod([UIViewController class], @selector(viewDidLoad));
+                  Method n1 = class_getInstanceMethod([UIViewController class], @selector(vlad_viewDidLoad));
+                  if (o1 && n1) method_exchangeImplementations(o1, n1);
+
+                  Class qrClass = NSClassFromString(@"QRCodeManager");
+                  if (qrClass) {
+                      SEL sel = sel_registerName("selectedCode:withImageData:");
+                      Method m = class_getInstanceMethod(qrClass, sel);
+                      if (m) {
+                          orig_QRCodeSelected = reinterpret_cast<void (*)(id, SEL, id, NSData *)>(method_getImplementation(m));
+                          method_setImplementation(m, (IMP)hook_QRCodeSelected);
+                      }
+                  }
+
+                  gLastQRImage = VladLoadQRImage();
+                  gLastQRCode = VladLoadQRCode();
+
+                  dispatch_async(dispatch_get_main_queue(), ^{ RetryOverlaySetup(0); });
+              }
+          }
+          TWEAKEOF
+
+      - name: Build dylib
+        run: |
+          set -o pipefail
+          make clean || true
+          make -j$(sysctl -n hw.ncpu) VERBOSE=1 2>&1 | tee build.log
+          DYLIB_PATH=$(find .theos/obj -name "VladAuto.dylib" -type f | head -n 1)
+          if [ -z "$DYLIB_PATH" ]; then
+            echo "❌ Dylib không build được"
+            tail -200 build.log
+            exit 1
+          fi
+          echo "✅ Build thành công: $DYLIB_PATH"
+          mkdir -p output
+          cp "$DYLIB_PATH" output/vlad.dylib
+          install_name_tool -id "@rpath/vlad.dylib" output/vlad.dylib
+          ldid -S output/vlad.dylib
+          ls -la output/
+
+      - name: Upload Dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: vlad.dylib
+          path: output/vlad.dylib
+          if-no-files-found: error
