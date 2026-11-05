@@ -44,11 +44,14 @@ jobs:
           #import <PhotosUI/PhotosUI.h>
           #import <QuartzCore/QuartzCore.h>
           #import <objc/runtime.h>
+          #import <objc/message.h>
           #import <CoreMedia/CoreMedia.h>
           #import <AudioToolbox/AudioToolbox.h>
           #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
+          // BIẾN TOÀN CỤC
           static UIImage *gLastQRImage = nil;
+          static UIImage *gBatchImage = nil; // Ảnh cho chức năng Nhập Cực Nhanh
           static UIWindow *gOverlayWindow = nil;
           static UIViewController *gCurrentEditor = nil;
           static UIViewController *gCurrentSplitVC = nil;
@@ -60,7 +63,7 @@ jobs:
           static BOOL gIsBatchMode = NO;
 
           // ==========================================
-          // PASSTHROUGH WINDOW
+          // PASSTHROUGH WINDOW (XUYÊN CHẠM)
           // ==========================================
           @interface VSPassthroughWindow : UIWindow
           @end
@@ -73,7 +76,7 @@ jobs:
           @end
 
           // ==========================================
-          // UI THEME (DARK STREETWEAR & NEON GREEN)
+          // UI THEME: DARK STREETWEAR & NEON GREEN
           // ==========================================
           @interface VladUI : NSObject
           + (UIColor *)neonGreen;
@@ -232,6 +235,118 @@ jobs:
               });
           }
           @end
+
+          // ==========================================
+          // HÀM XỬ LÝ RUNTIME
+          // ==========================================
+          static void ApplyImageToEditor(UIViewController *editor, UIImage *image) {
+              if (!editor || !image) return;
+              @try {
+                  // Lấy Engine
+                  SEL engineSel = NSSelectorFromString(@"engine");
+                  if (![editor respondsToSelector:engineSel]) return;
+                  id engine = ((id (*)(id, SEL))objc_msgSend)(editor, engineSel);
+                  
+                  // Lấy mảng Layers
+                  SEL layersSel = NSSelectorFromString(@"masterLayers");
+                  if (![engine respondsToSelector:layersSel]) return;
+                  NSArray *layers = ((id (*)(id, SEL))objc_msgSend)(engine, layersSel);
+                  
+                  for (id layer in layers) {
+                      // Lấy Image Generator của layer
+                      SEL genSel = NSSelectorFromString(@"imageGenerator");
+                      if (![layer respondsToSelector:genSel]) continue;
+                      id imageGen = ((id (*)(id, SEL))objc_msgSend)(layer, genSel);
+                      if (!imageGen) continue;
+                      
+                      // Lọc bỏ lớp màu / hiệu ứng
+                      if ([layer respondsToSelector:NSSelectorFromString(@"colorEffectMode")]) {
+                          unsigned long long mode = ((unsigned long long (*)(id, SEL))objc_msgSend)(layer, NSSelectorFromString(@"colorEffectMode"));
+                          if (mode > 0) continue; // Bỏ qua lớp màu
+                      }
+                      if ([layer respondsToSelector:NSSelectorFromString(@"layoutEffectMode")]) {
+                          unsigned long long mode = ((unsigned long long (*)(id, SEL))objc_msgSend)(layer, NSSelectorFromString(@"layoutEffectMode"));
+                          if (mode > 0) continue; // Bỏ qua lớp layout
+                      }
+                      
+                      // Set ảnh
+                      @try {
+                          [imageGen setValue:image forKey:@"layerImage"];
+                          if ([imageGen respondsToSelector:NSSelectorFromString(@"newPhotoNotification:")]) {
+                              ((void (*)(id, SEL, id))objc_msgSend)(imageGen, NSSelectorFromString(@"newPhotoNotification:"), nil);
+                          }
+                      } @catch (NSException *e) {}
+                  }
+                  
+                  // Cập nhật màn hình Editor
+                  if ([editor respondsToSelector:NSSelectorFromString(@"updateDisplayAtFrame:")]) {
+                      unsigned long long frame = 0;
+                      if ([editor respondsToSelector:NSSelectorFromString(@"currentFrame")]) {
+                          frame = ((unsigned long long (*)(id, SEL))objc_msgSend)(editor, NSSelectorFromString(@"currentFrame"));
+                      }
+                      ((void (*)(id, SEL, unsigned long long))objc_msgSend)(editor, NSSelectorFromString(@"updateDisplayAtFrame:"), frame);
+                  } else if ([editor respondsToSelector:NSSelectorFromString(@"updatePreview")]) {
+                      ((void (*)(id, SEL))objc_msgSend)(editor, NSSelectorFromString(@"updatePreview"));
+                  }
+              } @catch (NSException *e) {}
+          }
+
+          static void SplitSceneWithBeats(UIViewController *editor, NSArray<NSNumber *> *beats) {
+              if (!editor || beats.count == 0) return;
+              @try {
+                  Class PMClass = NSClassFromString(@"Video_Star.ProjectManager");
+                  if (!PMClass) PMClass = NSClassFromString(@"ProjectManager");
+                  if (!PMClass) return;
+                  
+                  id pm = ((id (*)(id, SEL))objc_msgSend)(PMClass, NSSelectorFromString(@"sharedInstance"));
+                  if (!pm) return;
+                  
+                  id project = ((id (*)(id, SEL))objc_msgSend)(pm, NSSelectorFromString(@"activeEditProject"));
+                  if (!project) return;
+                  
+                  unsigned long long sceneIndex = 0;
+                  if ([editor respondsToSelector:NSSelectorFromString(@"getSceneIndex")]) {
+                      sceneIndex = ((unsigned long long (*)(id, SEL))objc_msgSend)(editor, NSSelectorFromString(@"getSceneIndex"));
+                  } else if ([editor respondsToSelector:NSSelectorFromString(@"sceneIndex")]) {
+                      sceneIndex = ((unsigned long long (*)(id, SEL))objc_msgSend)(editor, NSSelectorFromString(@"sceneIndex"));
+                  }
+                  
+                  NSMutableArray *times = [NSMutableArray array];
+                  for (NSNumber *beat in beats) {
+                      double t = [beat doubleValue];
+                      CMTime cmTime = CMTimeMakeWithSeconds(t, 600);
+                      NSValue *val = [NSValue valueWithBytes:&cmTime objCType:@encode(CMTime)];
+                      [times addObject:val];
+                  }
+                  
+                  SEL sel = NSSelectorFromString(@"multiSplitSceneAtIndex:times:progressView:completion:");
+                  if ([project respondsToSelector:sel]) {
+                      NSMethodSignature *sig = [project methodSignatureForSelector:sel];
+                      if (sig) {
+                          NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                          [inv setTarget:project];
+                          [inv setSelector:sel];
+                          
+                          [inv setArgument:&sceneIndex atIndex:2];
+                          [inv setArgument:&times atIndex:3];
+                          
+                          id nilProgress = nil;
+                          [inv setArgument:&nilProgress atIndex:4];
+                          
+                          void (^completion)(void) = ^{
+                              dispatch_async(dispatch_get_main_queue(), ^{
+                                  UIAlertController *al = [UIAlertController alertControllerWithTitle:@"Hoàn tất" message:@"Đã tự động chia phân cảnh!" preferredStyle:UIAlertControllerStyleAlert];
+                                  [al addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                                  [[UIApplication sharedApplication].keyWindow.rootViewController presentViewController:al animated:YES completion:nil];
+                              });
+                          };
+                          [inv setArgument:&completion atIndex:5];
+                          
+                          [inv invoke];
+                      }
+                  }
+              } @catch (NSException *e) {}
+          }
 
           // ==========================================
           // MENU VIEW (4 CHỨC NĂNG)
@@ -406,6 +521,7 @@ jobs:
 
           - (void)funcTapped:(UIButton *)sender {
               if (sender.tag == 0) {
+                  // Nút 1: Xem Code
                   if (gLastQRImage) {
                       UIView *blurView = [[UIView alloc] initWithFrame:self.bounds];
                       blurView.backgroundColor = [UIColor colorWithWhite:0 alpha:0.95];
@@ -433,7 +549,7 @@ jobs:
                       [self showAlert:@"Thông báo" msg:@"Chưa có ảnh Code nào được lưu trong phiên này."];
                   }
               } else if (sender.tag == 1) {
-                  // Auto Split Beat
+                  // Nút 2: Chia Beat
                   if (!gCurrentSplitVC) {
                       [self showAlert:@"Lỗi" msg:@"Hãy vào màn hình chia phân cảnh (Split Scene) trước khi bấm!"];
                       return;
@@ -444,7 +560,8 @@ jobs:
                       [self pickAudioFile];
                   }
               } else if (sender.tag == 2) {
-                  // Auto Fill
+                  // Nút 3: Auto Fill
+                  gIsBatchMode = NO;
                   PHPickerConfiguration *config = [[PHPickerConfiguration alloc] init];
                   config.filter = [PHPickerFilter imagesFilter];
                   config.selectionLimit = 1;
@@ -452,16 +569,17 @@ jobs:
                   picker.delegate = self;
                   [[self getPresentingVC] presentViewController:picker animated:YES completion:nil];
               } else if (sender.tag == 3) {
-                  // Batch Mode
+                  // Nút 4: Batch Mode (Nhập Ảnh Cực Nhanh)
                   gIsBatchMode = !gIsBatchMode;
                   if (gIsBatchMode) {
+                      gBatchImage = nil; // Reset ảnh cũ
                       sender.backgroundColor = [VladUI neonGreen];
                       [sender setTitleColor:[UIColor blackColor] forState:UIControlStateNormal];
-                      [self showAlert:@"Chế Độ Batch" msg:@"Đã BẬT. Hãy chọn ảnh cho Scene đầu tiên, các Scene sau tool tự làm!"];
+                      [self showAlert:@"Bật Thành Công" msg:@"Hãy chọn ảnh cho phân cảnh đầu tiên. Các phân cảnh sau sẽ tự động nhập!"];
                   } else {
                       sender.backgroundColor = [VladUI cardBg];
                       [sender setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-                      [self showAlert:@"Chế Độ Batch" msg:@"Đã TẮT."];
+                      [self showAlert:@"Đã Tắt" msg:@"Chế độ nhập ảnh hàng loạt đã tắt."];
                   }
               }
           }
@@ -491,7 +609,7 @@ jobs:
                       NSString *msg = [NSString stringWithFormat:@"BPM: %.1f\nSố Beat: %lu\n\nĐang tự động chia phân cảnh...", bpm, (unsigned long)beats.count];
                       [self showAlert:@"Chia Beat Thành Công" msg:msg];
                       
-                      [self autoSplitEditorWithBeats:beats];
+                      SplitSceneWithBeats(gCurrentEditor, beats);
                       [self startHapticSync];
                   }
               }];
@@ -506,101 +624,18 @@ jobs:
                           if (image) {
                               gLastQRImage = (UIImage *)image;
                               dispatch_async(dispatch_get_main_queue(), ^{
-                                  [self autoApplyImageToLayers:gLastQRImage];
+                                  if (gIsBatchMode) {
+                                      gBatchImage = gLastQRImage;
+                                      [self showAlert:@"Đã Lưu Ảnh Gốc" msg:@"Chuyển sang phân cảnh tiếp theo, tool sẽ tự nhập ảnh này!"];
+                                  }
+                                  if (gCurrentEditor) {
+                                      ApplyImageToEditor(gCurrentEditor, gLastQRImage);
+                                  }
                               });
                           }
                       }];
                   }
               }
-          }
-
-          // ==========================================
-          // CÁC HÀM CAN THIỆP RUNTIME (TỪ FILE DUMP)
-          // ==========================================
-          - (void)autoApplyImageToLayers:(UIImage *)image {
-              @try {
-                  Class PMClass = NSClassFromString(@"ProjectManager");
-                  id pm = [PMClass performSelector:@selector(sharedInstance)];
-                  id project = [pm performSelector:@selector(activeEditProject)];
-                  if (!project) return;
-                  
-                  NSArray *scenes = [project valueForKey:@"scenes"];
-                  if (!scenes) return;
-                  
-                  unsigned long long currentScene = 0;
-                  if ([gCurrentEditor respondsToSelector:@selector(getSceneIndex)]) {
-                      currentScene = (unsigned long long)[gCurrentEditor performSelector:@selector(getSceneIndex)];
-                  } else if ([gCurrentEditor respondsToSelector:@selector(sceneIndex)]) {
-                      currentScene = (unsigned long long)[gCurrentEditor performSelector:@selector(sceneIndex)];
-                  }
-                  
-                  int filledCount = 0;
-                  for (id scene in scenes) {
-                      NSArray *layers = [scene valueForKey:@"layers"];
-                      if (!layers) continue;
-                      
-                      for (id layer in layers) {
-                          id imageGen = [layer performSelector:@selector(imageGenerator)];
-                          if (!imageGen) imageGen = [layer valueForKey:@"imageGenerator"];
-                          
-                          // Lọc lớp: bỏ qua lớp màu/hiệu ứng/trống
-                          int layerType = 0;
-                          if ([layer respondsToSelector:@selector(layerType)]) {
-                              layerType = (int)[layer performSelector:@selector(layerType)];
-                          }
-                          if (layerType == 3 || layerType == 4 || layerType == 5) continue; // 3=Color, 4=Effect, 5=Text
-                          
-                          if (imageGen) {
-                              [imageGen setValue:image forKey:@"layerImage"];
-                              if ([imageGen respondsToSelector:@selector(newPhotoNotification:)]) {
-                                  [imageGen performSelector:@selector(newPhotoNotification:) withObject:nil];
-                              }
-                              filledCount++;
-                          }
-                      }
-                  }
-                  
-                  if ([gCurrentEditor respondsToSelector:@selector(updateDisplayAtFrame:)]) {
-                      [gCurrentEditor performSelector:@selector(updateDisplayAtFrame:) withObject:@(currentScene)];
-                  }
-                  
-                  [self showAlert:@"Thành công" msg:[NSString stringWithFormat:@"Đã thay %d lớp hình ảnh!", filledCount]];
-              } @catch (NSException *e) {
-                  [self showAlert:@"Lỗi Runtime" msg:e.reason];
-              }
-          }
-
-          - (void)autoSplitEditorWithBeats:(NSArray<NSNumber *> *)beats {
-              if (!gCurrentEditor) return;
-              @try {
-                  Class PMClass = NSClassFromString(@"ProjectManager");
-                  id pm = [PMClass performSelector:@selector(sharedInstance)];
-                  id project = [pm performSelector:@selector(activeEditProject)];
-                  
-                  if (project) {
-                      unsigned long long sceneIndex = 0;
-                      if ([gCurrentEditor respondsToSelector:@selector(getSceneIndex)]) {
-                          sceneIndex = (unsigned long long)[gCurrentEditor performSelector:@selector(getSceneIndex)];
-                      }
-                      
-                      NSMutableArray *times = [NSMutableArray array];
-                      for (NSNumber *beat in beats) {
-                          double t = [beat doubleValue];
-                          CMTime cmTime = CMTimeMakeWithSeconds(t, 600);
-                          NSValue *val = [NSValue valueWithBytes:&cmTime objCType:@encode(CMTime)];
-                          [times addObject:val];
-                      }
-                      
-                      if ([project respondsToSelector:@selector(multiSplitSceneAtIndex:times:progressView:completion:)]) {
-                          void (^completion)(void) = ^{
-                              dispatch_async(dispatch_get_main_queue(), ^{
-                                  [self showAlert:@"Hoàn tất" msg:@"Đã chia phân cảnh trên timeline!"];
-                              });
-                          };
-                          [project performSelector:@selector(multiSplitSceneAtIndex:times:progressView:completion:) withObject:@(sceneIndex) withObject:times withObject:nil withObject:completion];
-                      }
-                  }
-              } @catch (NSException *e) {}
           }
 
           - (void)startHapticSync {
@@ -689,6 +724,7 @@ jobs:
           // ==========================================
           @interface UIViewController (VladHook)
           - (void)vlad_viewDidLoad;
+          - (void)vlad_viewDidAppear:(BOOL)animated;
           @end
           @implementation UIViewController (VladHook)
           - (void)vlad_viewDidLoad {
@@ -699,6 +735,16 @@ jobs:
               }
               if ([cls containsString:@"Split"] || [cls containsString:@"VideoReviewEditVC"]) {
                   gCurrentSplitVC = self;
+              }
+          }
+          - (void)vlad_viewDidAppear:(BOOL)animated {
+              [self vlad_viewDidAppear:animated];
+              NSString *cls = NSStringFromClass([self class]);
+              // Tự động nhập ảnh khi chuyển sang Editor mới trong chế độ Batch
+              if (([cls containsString:@"MultiLayerWizEffectVC"] || [cls containsString:@"Editor"]) && gBatchImage != nil) {
+                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                      ApplyImageToEditor(self, gBatchImage);
+                  });
               }
           }
           @end
@@ -720,8 +766,12 @@ jobs:
           __attribute__((constructor))
           static void initVlad() {
               @autoreleasepool {
-                  Method orig2 = class_getInstanceMethod([UIViewController class], @selector(viewDidLoad));
-                  Method new2 = class_getInstanceMethod([UIViewController class], @selector(vlad_viewDidLoad));
+                  Method orig1 = class_getInstanceMethod([UIViewController class], @selector(viewDidLoad));
+                  Method new1 = class_getInstanceMethod([UIViewController class], @selector(vlad_viewDidLoad));
+                  if (orig1 && new1) method_exchangeImplementations(orig1, new1);
+
+                  Method orig2 = class_getInstanceMethod([UIViewController class], @selector(viewDidAppear:));
+                  Method new2 = class_getInstanceMethod([UIViewController class], @selector(vlad_viewDidAppear:));
                   if (orig2 && new2) method_exchangeImplementations(orig2, new2);
 
                   Method orig3 = class_getInstanceMethod([AVPlayer class], @selector(play));
