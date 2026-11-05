@@ -409,7 +409,8 @@ jobs:
                   if (@available(iOS 14, *)) {
                       PHPickerConfiguration *config = [[PHPickerConfiguration alloc] initWithPhotoLibrary:[PHPhotoLibrary sharedPhotoLibrary]];
                       config.selectionLimit = 40; 
-                      config.filter = PHPickerFilter.images;
+                      // Đã fix lỗi cú pháp method Objective-C ở đây:
+                      config.filter = [PHPickerFilter imagesFilter];
                       PHPickerViewController *picker = [[PHPickerViewController alloc] initWithConfiguration:config];
                       picker.delegate = (id<PHPickerViewControllerDelegate>)self;
                       
