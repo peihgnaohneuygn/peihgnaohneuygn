@@ -52,9 +52,7 @@ jobs:
           #import <objc/runtime.h>
           #import <objc/message.h>
 
-          // ═══════════ TUYỆT ĐỐI KHÔNG KHAI BÁO @interface CLASS ẨN ═══════════
-          // Chỉ lưu con trỏ hàm gốc để Hook bằng Runtime
-
+          // ═══════════ CON TRỎ HÀM GỐC ═══════════
           static void (*orig_QRCodeSelected)(id, SEL, id, NSData *) = NULL;
           static void (*orig_LoadImageAsset)(id, SEL, id) = NULL;
 
@@ -130,7 +128,7 @@ jobs:
                                               encoding:NSUTF8StringEncoding error:nil];
           }
 
-          // ═══════════ C-FUNCTIONS CHO HOOK (THAY THẾ CATEGORY) ═══════════
+          // ═══════════ C-FUNCTIONS CHO HOOK ═══════════
           static void hook_QRCodeSelected(id self, SEL _cmd, id arg1, NSData *data) {
               if (orig_QRCodeSelected) orig_QRCodeSelected(self, _cmd, arg1, data);
               if (data && data.length > 0) {
@@ -362,7 +360,7 @@ jobs:
           - (void)closeTapped { [self dismissViewControllerAnimated:YES completion:nil]; }
           @end
 
-          // ═══════════ MENU VIEW (TỐI GIẢN 2 NÚT) ═══════════
+          // ═══════════ MENU VIEW ═══════════
           @interface VladMenuView : UIView
           @property (nonatomic, strong) UIView *panel;
           @end
@@ -510,7 +508,7 @@ jobs:
           - (void)closeTapped { [self removeFromSuperview]; }
           @end
 
-          // ═══════════ LOGO (TỰ VẼ TAY) ═══════════
+          // ═══════════ LOGO ═══════════
           @interface VladLogoView : UIView
           @end
           @implementation VladLogoView
@@ -548,7 +546,7 @@ jobs:
           }
           @end
 
-          // ═══════════ HOOK UIViewController (DÙNG CATEGORY HỢP LỆ) ═══════════
+          // ═══════════ HOOK UIViewController ═══════════
           @interface UIViewController (VladHook)
           - (void)vlad_viewDidLoad;
           @end
@@ -606,42 +604,37 @@ jobs:
               }
           }
 
-          // ═══════════ KHỞI TẠO (RUNTIME HOOK 100%) ═══════════
+          // ═══════════ KHỞI TẠO (ĐÃ SỬA LỖI CAST) ═══════════
           __attribute__((constructor))
           static void initVlad(void) {
               @autoreleasepool {
-                  // 1. Hook UIViewController
                   Method o1 = class_getInstanceMethod([UIViewController class], @selector(viewDidLoad));
                   Method n1 = class_getInstanceMethod([UIViewController class], @selector(vlad_viewDidLoad));
                   if (o1 && n1) method_exchangeImplementations(o1, n1);
 
-                  // 2. Hook QRCodeManager (Hoàn toàn bằng Runtime, không dùng @interface)
                   Class qrClass = objc_getClass("QRCodeManager");
                   if (qrClass) {
                       SEL sel = sel_registerName("selectedCode:withImageData:");
                       Method m = class_getInstanceMethod(qrClass, sel);
                       if (m) {
-                          orig_QRCodeSelected = (void *)method_getImplementation(m);
+                          orig_QRCodeSelected = (void (*)(id, SEL, id, NSData *))method_getImplementation(m);
                           method_setImplementation(m, (IMP)hook_QRCodeSelected);
                       }
                   }
 
-                  // 3. Hook MultiLayerImageGenerator (Hoàn toàn bằng Runtime, không dùng @interface)
                   Class genClass = objc_getClass("MultiLayerImageGenerator");
                   if (genClass) {
                       SEL sel = sel_registerName("loadImageAsset:");
                       Method m = class_getInstanceMethod(genClass, sel);
                       if (m) {
-                          orig_LoadImageAsset = (void *)method_getImplementation(m);
+                          orig_LoadImageAsset = (void (*)(id, SEL, id))method_getImplementation(m);
                           method_setImplementation(m, (IMP)hook_LoadImageAsset);
                       }
                   }
 
-                  // 4. Load ảnh QR cũ
                   gLastQRImage = VladLoadQRImage();
                   gLastQRCode = VladLoadQRCode();
 
-                  // 5. Khởi tạo Overlay
                   dispatch_async(dispatch_get_main_queue(), ^{ RetryOverlaySetup(0); });
               }
           }
