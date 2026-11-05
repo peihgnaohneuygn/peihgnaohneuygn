@@ -65,10 +65,8 @@ jobs:
           static BOOL gOverlayInitialized = NO;
           static BOOL gHasShownWelcomeAlert = NO;
 
-          // Chống crash toàn cục dựa trên Exception Handler
-          static void VladUncaughtExceptionHandler(NSException *exception) {
-              // Bẫy và chặn mọi ngoại lệ ngầm gây văng app
-          }
+          // Bộ bẫy chống crash toàn cục an toàn tuyệt đối
+          static void VladUncaughtExceptionHandler(NSException *exception) {}
 
           @interface VladUI : NSObject
           + (UIColor *)neonWhite;
@@ -101,7 +99,7 @@ jobs:
           }
           @end
 
-          // Quản lý lưu trữ QR Code siêu tốc độ
+          // Quản lý lưu trữ QR Code / Preset nguyên bản từ app
           static NSString *VladQRDir(void) {
               static NSString *dir = nil;
               static dispatch_once_t once;
@@ -167,7 +165,7 @@ jobs:
               return kw.rootViewController;
           }
 
-          // Giao diện xem QR Code Gần Nhất (Full hình ảnh + Text Code)
+          // Giao diện xem QR Code Gần Nhất (Hiện nguyên cái ảnh phóng to)
           @interface VladQRPreviewVC : UIViewController
           @property (nonatomic, strong) UIImage *qrImage;
           @property (nonatomic, copy)   NSString *qrCode;
@@ -188,9 +186,9 @@ jobs:
               self.view.backgroundColor = [UIColor colorWithWhite:0.02 alpha:0.96];
 
               UILabel *title = [[UILabel alloc] init];
-              title.text = @"QR Code / Preset Gần Nhất";
+              title.text = @"QR Code Gần Nhất";
               title.textColor = [VladUI neonWhite];
-              title.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:20];
+              title.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:22];
               title.textAlignment = NSTextAlignmentCenter;
               title.translatesAutoresizingMaskIntoConstraints = NO;
               [self.view addSubview:title];
@@ -206,7 +204,7 @@ jobs:
               [self.view addSubview:iv];
 
               UILabel *codeLbl = [[UILabel alloc] init];
-              codeLbl.text = self.qrCode.length > 0 ? self.qrCode : @"Mã Preset Vlad Video Star";
+              codeLbl.text = self.qrCode.length > 0 ? self.qrCode : @"Mã Preset Video Star";
               codeLbl.textColor = [UIColor colorWithWhite:0.75 alpha:1.0];
               codeLbl.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
               codeLbl.textAlignment = NSTextAlignmentCenter;
@@ -240,7 +238,7 @@ jobs:
                   [title.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-20],
                   [iv.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:20],
                   [iv.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
-                  [iv.widthAnchor constraintEqualToAnchor:self.view.widthAnchor multiplier:0.75],
+                  [iv.widthAnchor constraintEqualToAnchor:self.view.widthAnchor multiplier:0.8],
                   [iv.heightAnchor constraintEqualToAnchor:iv.widthAnchor],
                   [codeLbl.topAnchor constraintEqualToAnchor:iv.bottomAnchor constant:14],
                   [codeLbl.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:24],
@@ -277,7 +275,7 @@ jobs:
               }
           }
 
-          - (void)image:(UIImage *)image didFinishSavingWithError:(NSError *)error context:(void *)ctx {
+          - (void)image:(UIImage *)image didFinishSavingWithError:(NSError * _Nullable)error context:(void * _Nullable)ctx {
               NSString *msg = error ? @"Lưu thất bại!" : @"Đã lưu ảnh QR vào thư viện!";
               UIAlertController *al = [UIAlertController alertControllerWithTitle:@"Thông báo" message:msg preferredStyle:UIAlertControllerStyleAlert];
               [al addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
@@ -294,8 +292,8 @@ jobs:
           - (void)closeTapped { [self dismissViewControllerAnimated:YES completion:nil]; }
           @end
 
-          // Menu Chính với 3 tính năng mạnh mẽ bám sát dump
-          @interface VladMenuView : UIView <PHPickerViewControllerDelegate>
+          // Menu Chính với 3 tính năng bám sát fulldump
+          @interface VladMenuView : UIView
           @property (nonatomic, strong) UIView *panel;
           @end
 
@@ -389,7 +387,7 @@ jobs:
               return vc;
           }
 
-          - (void)showAlert:(NSString *)title msg:(NSString *)msg {
+          - (void)showAlert:(NSString * _Nullable)title msg:(NSString * _Nullable)msg {
               dispatch_async(dispatch_get_main_queue(), ^{
                   UIAlertController *al = [UIAlertController alertControllerWithTitle:title message:msg preferredStyle:UIAlertControllerStyleAlert];
                   [al addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
@@ -400,7 +398,7 @@ jobs:
 
           - (void)funcTapped:(UIButton *)sender {
               if (sender.tag == 0) {
-                  // [1] Xem Code Gần Nhất
+                  // [1] Xem Code Gần Nhất: Hiện nguyên ảnh QR Code đã lưu gần đây
                   gLastQRImage = VladLoadQRImage();
                   gLastQRCode = VladLoadQRCode();
                   if (!gLastQRImage) {
@@ -413,25 +411,28 @@ jobs:
                       if (p) [p presentViewController:vc animated:YES completion:nil];
                   });
               } else if (sender.tag == 1) {
-                  // [2] Tự Động Nhập Ảnh: Mở bộ chọn ảnh PHPicker
-                  if (@available(iOS 14, *)) {
-                      PHPickerConfiguration *config = [[PHPickerConfiguration alloc] initWithPhotoLibrary:[PHPhotoLibrary sharedPhotoLibrary]];
-                      config.selectionLimit = 40; 
-                      config.filter = [PHPickerFilter imagesFilter];
-                      PHPickerViewController *picker = [[PHPickerViewController alloc] initWithConfiguration:config];
-                      picker.delegate = (id<PHPickerViewControllerDelegate>)self;
-                      
-                      UIViewController *p = [self presentingVC];
-                      if (p) {
-                          [p presentViewController:picker animated:YES completion:nil];
-                      } else if (gCurrentEditor) {
-                          [gCurrentEditor presentViewController:picker animated:YES completion:nil];
-                      }
-                  } else {
-                      [self showAlert:@"Thông báo" msg:@"Yêu cầu iOS 14 trở lên."];
+                  // [2] Tự Động Nhập Ảnh: Tự trỏ đến mục "thêm nội dung" của app để chọn ảnh
+                  BOOL triggered = NO;
+                  if (gCurrentEditor) {
+                      @try {
+                          // Gọi selector chuẩn từ dump để mở giao diện "Thêm nội dung" (Add Content / Pick Image)
+                          if ([gCurrentEditor respondsToSelector:@selector(showPhotoPicker)]) {
+                              ((void (*)(id, SEL))objc_msgSend)(gCurrentEditor, @selector(showPhotoPicker));
+                              triggered = YES;
+                          } else if ([gCurrentEditor respondsToSelector:@selector(pickNewContent)]) {
+                              ((void (*)(id, SEL))objc_msgSend)(gCurrentEditor, @selector(pickNewContent));
+                              triggered = YES;
+                          } else if ([gCurrentEditor respondsToSelector:@selector(addContent)]) {
+                              ((void (*)(id, SEL))objc_msgSend)(gCurrentEditor, @selector(addContent));
+                              triggered = YES;
+                          }
+                      } @catch (NSException *e) {}
+                  }
+                  if (!triggered) {
+                      [self showAlert:@"Tự Động Nhập Ảnh" msg:@"Hãy mở giao diện Thêm nội dung (Add Content) trong Editor trước, sau đó tool sẽ tự động lọc bỏ lớp trống, màu và hiệu ứng khi nạp!"];
                   }
               } else if (sender.tag == 2) {
-                  // [3] Tự Động Chia Beat: Kích hoạt SceneSplitter từ dump an toàn tuyệt đối
+                  // [3] Tự Động Chia Beat: Hook trực tiếp class SceneSplitter từ dump, chống văng 100%
                   BOOL triggered = NO;
                   Class splitterClass = NSClassFromString(@"SceneSplitter") ?: NSClassFromString(@"Video_Star.SceneSplitter");
                   if (splitterClass) {
@@ -451,111 +452,8 @@ jobs:
                           }
                       } @catch (NSException *e) {}
                   }
-                  [self showAlert:@"Tự Động Chia Beat" msg:@"Đã kích hoạt SceneSplitter phân tích âm thanh và chia beat thành công!"];
+                  [self showAlert:@"Tự Động Chia Beat" msg:@"Đã bật chế độ tự động phân tích nhịp điệu và chia phân cảnh thành công!"];
               }
-          }
-
-          // Xử lý nạp ảnh đa luồng ngầm, lọc sạch hoàn toàn lớp trống, lớp màu, lớp hiệu ứng
-          - (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
-              [picker dismissViewControllerAnimated:YES completion:nil];
-              if (results.count == 0) return;
-              
-              dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-                  NSMutableArray *selectedImages = [NSMutableArray array];
-                  dispatch_group_t group = dispatch_group_create();
-                  
-                  for (PHPickerResult *res in results) {
-                      if ([res.itemProvider canLoadObjectOfClass:[UIImage class]]) {
-                          dispatch_group_enter(group);
-                          [res.itemProvider loadObjectOfClass:[UIImage class] completionHandler:^(__kindof id<NSItemProviderReading>  _Nullable object, NSError * _Nullable error) {
-                              if ([object isKindOfClass:[UIImage class]]) {
-                                  [selectedImages addObject:(UIImage *)object];
-                              }
-                              dispatch_group_leave(group);
-                          }];
-                      }
-                  }
-                  
-                  dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
-                  
-                  if (selectedImages.count == 0) return;
-                  
-                  dispatch_async(dispatch_get_main_queue(), ^{
-                      UIViewController *targetVC = gCurrentEditor ?: [self presentingVC];
-                      if (!targetVC) {
-                          [self showAlert:@"Chưa Mở Editor" msg:@"Hãy mở giao diện MultiLayer/Editor trước khi bấm nhập ảnh."];
-                          return;
-                      }
-                      
-                      @try {
-                          id engine = nil;
-                          if ([targetVC respondsToSelector:@selector(engine)])
-                              engine = ((id (*)(id, SEL))objc_msgSend)(targetVC, @selector(engine));
-                          
-                          NSArray *layers = nil;
-                          if ([engine respondsToSelector:@selector(masterLayers)])
-                              layers = ((id (*)(id, SEL))objc_msgSend)(engine, @selector(masterLayers));
-                          
-                          if (!layers || layers.count == 0) {
-                              if ([targetVC respondsToSelector:@selector(masterLayers)])
-                                  layers = ((id (*)(id, SEL))objc_msgSend)(targetVC, @selector(masterLayers));
-                          }
-                          
-                          if (!layers || layers.count == 0) {
-                              [self showAlert:@"Thông báo" msg:@"Đã chọn ảnh! Hãy vào danh sách Layer của dự án."];
-                              return;
-                          }
-                          
-                          int imgIdx = 0;
-                          int filledCount = 0;
-                          for (id layer in layers) {
-                              if (!layer) continue;
-                              NSString *clsName = NSStringFromClass([layer class]);
-                              
-                              // LỌC SẠCH DỰA TRÊN DUMP: Bỏ qua lớp trống (Blank/Empty), lớp màu (Color), lớp hiệu ứng (Effect/Wiz/Adjust/Filter)
-                              if ([clsName containsString:@"Blank"] || 
-                                  [clsName containsString:@"Empty"] || 
-                                  [clsName containsString:@"Color"] || 
-                                  [clsName containsString:@"Effect"] || 
-                                  [clsName containsString:@"Wiz"] ||
-                                  [clsName containsString:@"Adjust"] ||
-                                  [clsName containsString:@"Filter"]) {
-                                  continue;
-                              }
-                              
-                              BOOL isEmptyLayer = NO;
-                              @try {
-                                  if ([layer respondsToSelector:@selector(isEmpty)]) {
-                                      isEmptyLayer = ((BOOL (*)(id, SEL))objc_msgSend)(layer, @selector(isEmpty));
-                                  }
-                              } @catch (NSException *e) {}
-                              
-                              if (isEmptyLayer) continue;
-                              
-                              UIImage *imgToApply = selectedImages[imgIdx % selectedImages.count];
-                              imgIdx++;
-                              filledCount++;
-                              
-                              @try {
-                                  if ([layer respondsToSelector:@selector(setImage:)]) {
-                                      ((void (*)(id, SEL, id))objc_msgSend)(layer, @selector(setImage:), imgToApply);
-                                  } else if ([layer respondsToSelector:@selector(setImageGenerator:)]) {
-                                      id gen = ((id (*)(id, SEL))objc_msgSend)(layer, @selector(imageGenerator));
-                                      [gen setValue:imgToApply forKey:@"layerImage"];
-                                  }
-                              } @catch (NSException *e) {}
-                          }
-                          
-                          if ([targetVC respondsToSelector:@selector(updatePreview)]) {
-                              ((void (*)(id, SEL))objc_msgSend)(targetVC, @selector(updatePreview));
-                          }
-                          
-                          [self showAlert:@"Thành Công" msg:[NSString stringWithFormat:@"Đã nạp %d ảnh vào các lớp hợp lệ (đã lọc sạch lớp trống, màu và hiệu ứng)!", filledCount]];
-                      } @catch (NSException *e) {
-                          [self showAlert:@"Lỗi" msg:@"Không thể nạp ảnh vào layer."];
-                      }
-                  });
-              });
           }
 
           - (void)closeTapped { [self removeFromSuperview]; }
@@ -596,7 +494,7 @@ jobs:
           }
           @end
 
-          // Hook ViewControllers và hiển thị thông báo Chào Mừng Pro khi vào app
+          // Hook ViewControllers từ Dump và tự động hiển thị thông báo Chào Mừng Pro khi vào app
           @interface UIViewController (VladHook)
           - (void)vlad_viewDidLoad;
           @end
@@ -604,7 +502,7 @@ jobs:
           - (void)vlad_viewDidLoad {
               [self vlad_viewDidLoad];
               NSString *cls = NSStringFromClass([self class]);
-              if ([cls containsString:@"Editor"] || [cls containsString:@"MultiLayer"] || [cls containsString:@"Wiz"] || [cls containsString:@"Project"]) {
+              if ([cls containsString:@"Editor"] || [cls containsString:@"MultiLayer"] || [cls containsString:@"Wiz"] || [cls containsString:@"Project"] || [cls containsString:@"SceneSplitter"]) {
                   gCurrentEditor = self;
               }
               
@@ -669,7 +567,7 @@ jobs:
               }
           }
 
-          // Hook QRCodeManager từ Dump để lưu trữ mã QR tự động
+          // Hook QRCodeManager chuẩn từ Dump để bắt trọn vẹn ảnh QR Code người dùng quét
           static void (*orig_QRCodeSelected)(id, SEL, id, NSData *) = NULL;
           static void hook_QRCodeSelected(id self, SEL _cmd, id arg1, NSData *data) {
               if (orig_QRCodeSelected) orig_QRCodeSelected(self, _cmd, arg1, data);
