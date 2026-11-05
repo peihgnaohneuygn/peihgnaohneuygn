@@ -21,9 +21,9 @@ jobs:
           echo "=== SDK đã cài ==="
           ls -la $THEOS/sdks/
 
-      - name: Setup dpkg (ldid cài sau ở bước ký)
+      - name: Setup Tools (ldid & dpkg)
         run: |
-          brew install dpkg
+          brew install ldid dpkg
 
       - name: Tạo Build Files
         run: |
@@ -628,17 +628,11 @@ jobs:
           }
           TWEAKEOF
 
-      - name: Build & Ký Dylib
+      - name: Build
         run: |
           set -o pipefail
           make clean || true
           make -j1 VERBOSE=1 2>&1 | tee build.log
-          
-          brew install ldid || true
-          DYLIB_PATH=$(find .theos/obj -name "*.dylib" | head -n 1)
-          echo "Đang ký ad-hoc cho file: $DYLIB_PATH"
-          ldid -S "$DYLIB_PATH"
-          echo "Ký xong!"
           echo "=== build xong ==="
 
       - name: Verify
