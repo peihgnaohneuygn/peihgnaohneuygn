@@ -49,6 +49,18 @@ jobs:
           #import <AudioToolbox/AudioToolbox.h>
           #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
+          // KHAI BÁO DUMMY CLASS (ĐỂ COMPILER KHÔNG LỖI)
+          @interface QRCodeManager : NSObject
+          @end
+          @interface MultiLayerImageGenerator : NSObject
+          @end
+          @interface ProjectManager : NSObject
+          @end
+          @interface MultiLayerEngine : NSObject
+          @end
+          @interface MultiLayerLayer : NSObject
+          @end
+
           static UIImage *gLastQRImage = nil;
           static UIWindow *gOverlayWindow = nil;
           static UIViewController *gCurrentEditor = nil;
@@ -260,6 +272,9 @@ jobs:
                           
                           @try {
                               [imageGen setValue:image forKey:@"layerImage"];
+                              if ([imageGen respondsToSelector:NSSelectorFromString(@"newPhotoNotification:")]) {
+                                  ((void (*)(id, SEL, id))objc_msgSend)(imageGen, NSSelectorFromString(@"newPhotoNotification:"), nil);
+                              }
                               count++;
                           } @catch (NSException *e) {}
                       }
@@ -662,7 +677,7 @@ jobs:
           @end
 
           // ==========================================
-          // HOOKS (BẮT ĐÚNG CHỖ TỪ FILE DUMP)
+          // HOOKS
           // ==========================================
           @interface UIViewController (VladHook)
           - (void)vlad_viewDidLoad;
@@ -694,7 +709,6 @@ jobs:
           }
           @end
 
-          // Hook QRCodeManager để lưu ảnh Code gần nhất
           @interface QRCodeManager (VladHook)
           - (void)vlad_selectedCode:(id)arg1 withImageData:(NSData *)data;
           @end
@@ -707,7 +721,6 @@ jobs:
           }
           @end
 
-          // Hook MultiLayerImageGenerator để lấy ảnh mày chọn từ "Thêm Nội Dung"
           @interface MultiLayerImageGenerator (VladHook)
           - (void)vlad_loadImageAsset:(id)asset;
           @end
@@ -716,7 +729,7 @@ jobs:
               [self vlad_loadImageAsset:asset];
               if (gIsAutoFillMode) {
                   UIImage *img = [self valueForKey:@"layerImage"];
-                  if (img) {
+                  if (img && gCurrentEditor) {
                       gIsAutoFillMode = NO;
                       dispatch_async(dispatch_get_main_queue(), ^{
                           ApplyImageToEditor(gCurrentEditor, img);
@@ -737,13 +750,19 @@ jobs:
                   Method new2 = class_getInstanceMethod([AVPlayer class], @selector(vlad_play));
                   if (orig2 && new2) method_exchangeImplementations(orig2, new2);
 
-                  Method orig3 = class_getInstanceMethod(NSClassFromString(@"QRCodeManager"), NSSelectorFromString(@"selectedCode:withImageData:"));
-                  Method new3 = class_getInstanceMethod(NSClassFromString(@"QRCodeManager"), NSSelectorFromString(@"vlad_selectedCode:withImageData:"));
-                  if (orig3 && new3) method_exchangeImplementations(orig3, new3);
+                  Class qrClass = NSClassFromString(@"QRCodeManager");
+                  if (qrClass) {
+                      Method orig3 = class_getInstanceMethod(qrClass, NSSelectorFromString(@"selectedCode:withImageData:"));
+                      Method new3 = class_getInstanceMethod(qrClass, NSSelectorFromString(@"vlad_selectedCode:withImageData:"));
+                      if (orig3 && new3) method_exchangeImplementations(orig3, new3);
+                  }
 
-                  Method orig4 = class_getInstanceMethod(NSClassFromString(@"MultiLayerImageGenerator"), NSSelectorFromString(@"loadImageAsset:"));
-                  Method new4 = class_getInstanceMethod(NSClassFromString(@"MultiLayerImageGenerator"), NSSelectorFromString(@"vlad_loadImageAsset:"));
-                  if (orig4 && new4) method_exchangeImplementations(orig4, new4);
+                  Class genClass = NSClassFromString(@"MultiLayerImageGenerator");
+                  if (genClass) {
+                      Method orig4 = class_getInstanceMethod(genClass, NSSelectorFromString(@"loadImageAsset:"));
+                      Method new4 = class_getInstanceMethod(genClass, NSSelectorFromString(@"vlad_loadImageAsset:"));
+                      if (orig4 && new4) method_exchangeImplementations(orig4, new4);
+                  }
 
                   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.0 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
                       if (!gOverlayWindow) {
