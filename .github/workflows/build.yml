@@ -35,8 +35,8 @@ jobs:
           VladAuto_FILES = Tweak.mm
           VladAuto_FRAMEWORKS = UIKit Foundation Photos PhotosUI QuartzCore UniformTypeIdentifiers
           
-          VladAuto_CFLAGS  = -fobjc-arc -w -stdlib=libc++ -I$(THEOS)/sdks/iPhoneOS16.5.sdk/usr/include/c++/v1
-          VladAuto_CCFLAGS = -fobjc-arc -w -std=c++17 -stdlib=libc++ -I$(THEOS)/sdks/iPhoneOS16.5.sdk/usr/include/c++/v1
+          VladAuto_CFLAGS  = -fobjc-arc -w -Wno-everything -stdlib=libc++ -I$(THEOS)/sdks/iPhoneOS16.5.sdk/usr/include/c++/v1
+          VladAuto_CCFLAGS = -fobjc-arc -w -Wno-everything -std=c++17 -stdlib=libc++ -I$(THEOS)/sdks/iPhoneOS16.5.sdk/usr/include/c++/v1
           VladAuto_USE_MODULES = 0
           VladAuto_LDFLAGS = -stdlib=libc++ -Wl,-undefined,dynamic_lookup
 
@@ -60,9 +60,9 @@ jobs:
           static BOOL gIsAutoFillMode = NO;
           static BOOL gOverlayInitialized = NO;
 
-          // Lưu hàm gốc để gọi lại (thay vì dùng Category)
-          static IMP gOrigQRCodeSelected = NULL;
-          static IMP gOrigImageAssetLoad = NULL;
+          // Con trỏ hàm gốc cho Runtime Hook
+          static void (*orig_QRCodeSelected)(id, SEL, id, NSData *) = NULL;
+          static void (*orig_LoadImageAsset)(id, SEL, id) = NULL;
 
           // ═══════════ UI HELPERS ═══════════
           @interface VladUI : NSObject
@@ -128,13 +128,10 @@ jobs:
                                               encoding:NSUTF8StringEncoding error:nil];
           }
 
-          // ═══════════ C-HÀM HOOK (KHÔNG DÙNG CATEGORY) ═══════════
-          static void vlad_selectedCode(id self, SEL _cmd, id arg1, NSData *data) {
-              // Gọi hàm gốc
-              if (gOrigQRCodeSelected) {
-                  ((void (*)(id, SEL, id, NSData *))gOrigQRCodeSelected)(self, _cmd, arg1, data);
-              }
-              // Chạy logic hook
+          // ═══════════ C-FUNCTIONS CHO HOOK ═══════════
+          // Hook QRCodeManager
+          static void hook_QRCodeSelected(id self, SEL _cmd, id arg1, NSData *data) {
+              if (orig_QRCodeSelected) orig_QRCodeSelected(self, _cmd, arg1, data);
               if (data && data.length > 0) {
                   UIImage *img = [UIImage imageWithData:data];
                   if (img) {
@@ -147,12 +144,9 @@ jobs:
               }
           }
 
-          static void vlad_loadImageAsset(id self, SEL _cmd, id asset) {
-              // Gọi hàm gốc
-              if (gOrigImageAssetLoad) {
-                  ((void (*)(id, SEL, id))gOrigImageAssetLoad)(self, _cmd, asset);
-              }
-              // Chạy logic hook
+          // Hook MultiLayerImageGenerator
+          static void hook_LoadImageAsset(id self, SEL _cmd, id asset) {
+              if (orig_LoadImageAsset) orig_LoadImageAsset(self, _cmd, asset);
               if (!gIsAutoFillMode) return;
 
               __weak __typeof(self) weakSelf = self;
@@ -169,7 +163,6 @@ jobs:
                       
                       if (img && gCurrentEditor && gCurrentEditor.view.window) {
                           gIsAutoFillMode = NO;
-                          // Áp ảnh cho tất cả layer
                           NSInteger applied = 0;
                           @try {
                               id engine = nil;
@@ -622,29 +615,29 @@ jobs:
                   Method n1 = class_getInstanceMethod([UIViewController class], @selector(vlad_viewDidLoad));
                   if (o1 && n1) method_exchangeImplementations(o1, n1);
 
-                  // 2. Hook QRCodeManager (Dùng Runtime, không dùng Category để tránh lỗi Linker)
+                  // 2. Hook QRCodeManager (Dùng Runtime thuần túy, xóa bỏ khai báo @interface gây lỗi linker)
                   Class qrClass = objc_getClass("QRCodeManager");
                   if (qrClass) {
-                      SEL sel = NSSelectorFromString(@"selectedCode:withImageData:");
+                      SEL sel = sel_registerName("selectedCode:withImageData:");
                       Method m = class_getInstanceMethod(qrClass, sel);
                       if (m) {
-                          gOrigQRCodeSelected = method_getImplementation(m);
-                          method_setImplementation(m, (IMP)vlad_selectedCode);
+                          orig_QRCodeSelected = (void *)method_getImplementation(m);
+                          method_setImplementation(m, (IMP)hook_QRCodeSelected);
                       }
                   }
 
-                  // 3. Hook MultiLayerImageGenerator (Dùng Runtime)
+                  // 3. Hook MultiLayerImageGenerator (Dùng Runtime thuần túy)
                   Class genClass = objc_getClass("MultiLayerImageGenerator");
                   if (genClass) {
-                      SEL sel = NSSelectorFromString(@"loadImageAsset:");
+                      SEL sel = sel_registerName("loadImageAsset:");
                       Method m = class_getInstanceMethod(genClass, sel);
                       if (m) {
-                          gOrigImageAssetLoad = method_getImplementation(m);
-                          method_setImplementation(m, (IMP)vlad_loadImageAsset);
+                          orig_LoadImageAsset = (void *)method_getImplementation(m);
+                          method_setImplementation(m, (IMP)hook_LoadImageAsset);
                       }
                   }
 
-                  // 4. Load ảnh QR cũ (nếu có)
+                  // 4. Load ảnh QR cũ
                   gLastQRImage = VladLoadQRImage();
                   gLastQRCode = VladLoadQRCode();
 
