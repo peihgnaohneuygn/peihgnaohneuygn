@@ -17,32 +17,33 @@ jobs:
           echo "THEOS=$HOME/theos" >> $GITHUB_ENV
           echo "$HOME/theos/bin" >> $GITHUB_PATH
 
-      - name: Tải SDK
+      - name: Download SDK 16.5
         run: |
           set -e
           mkdir -p $THEOS/sdks
           git clone --depth 1 https://github.com/theos/sdks.git /tmp/sdks
-          cp -R /tmp/sdks/iPhoneOS14.5.sdk $THEOS/sdks/
+          cp -R /tmp/sdks/iPhoneOS16.5.sdk $THEOS/sdks/
 
-      - name: Setup Tools (ldid & dpkg)
+      - name: Create Makefile & Tweak.mm
         run: |
-          brew install ldid dpkg
-
-      - name: Tạo Build Files
-        run: |
-          cat << 'EOF' > Makefile
+          cat > Makefile << 'MAKEEOF'
           ARCHS = arm64 arm64e
-          TARGET = iphone:clang:14.5:14.0
+          TARGET = iphone:clang:16.5:14.0
           include $(THEOS)/makefiles/common.mk
+
           LIBRARY_NAME = VladAuto
           VladAuto_FILES = Tweak.mm
           VladAuto_FRAMEWORKS = UIKit Foundation Photos PhotosUI QuartzCore UniformTypeIdentifiers
-          VladAuto_CFLAGS = -fobjc-arc -w -Wno-everything
-          VladAuto_CCFLAGS = -fobjc-arc -w -Wno-everything -std=c++17
-          include $(THEOS_MAKE_PATH)/library.mk
-          EOF
+          
+          VladAuto_CFLAGS  = -fobjc-arc -w -stdlib=libc++ -I$(THEOS)/sdks/iPhoneOS16.5.sdk/usr/include/c++/v1
+          VladAuto_CCFLAGS = -fobjc-arc -w -std=c++17 -stdlib=libc++ -I$(THEOS)/sdks/iPhoneOS16.5.sdk/usr/include/c++/v1
+          VladAuto_LDFLAGS = -stdlib=libc++ -Wl,-undefined,dynamic_lookup
+          VladAuto_USE_MODULES = 0
 
-          cat << 'TWEAKEOF' > Tweak.mm
+          include $(THEOS_MAKE_PATH)/library.mk
+          MAKEEOF
+
+          cat > Tweak.mm << 'TWEAKEOF'
           #import <UIKit/UIKit.h>
           #import <Foundation/Foundation.h>
           #import <Photos/Photos.h>
@@ -51,15 +52,11 @@ jobs:
           #import <objc/runtime.h>
           #import <objc/message.h>
 
-          // ═══════════ KHAI BÁO CLASS GỐC (GIỐNG CODE CŨ CỦA BẠN) ═══════════
-          @interface QRCodeManager : NSObject
-          + (id)sharedInstance;
-          - (void)selectedCode:(id)arg1 withImageData:(NSData *)data;
-          @end
+          // ═══════════ TUYỆT ĐỐI KHÔNG KHAI BÁO @interface CLASS ẨN ═══════════
+          // Chỉ lưu con trỏ hàm gốc để Hook bằng Runtime
 
-          @interface MultiLayerImageGenerator : NSObject
-          - (void)loadImageAsset:(id)asset;
-          @end
+          static void (*orig_QRCodeSelected)(id, SEL, id, NSData *) = NULL;
+          static void (*orig_LoadImageAsset)(id, SEL, id) = NULL;
 
           // ═══════════ GLOBALS ═══════════
           static UIImage  *gLastQRImage = nil;
@@ -133,51 +130,79 @@ jobs:
                                               encoding:NSUTF8StringEncoding error:nil];
           }
 
-          // ═══════════ APPLY IMAGE LOGIC ═══════════
-          static NSInteger ApplyImageToAllLayers(UIViewController *editor, UIImage *image) {
-              if (!editor || !image) return -1;
-              NSInteger applied = 0;
-              @try {
-                  id engine = nil;
-                  if ([editor respondsToSelector:@selector(engine)])
-                      engine = ((id (*)(id, SEL))objc_msgSend)(editor, @selector(engine));
-                  if (!engine) @try { engine = [editor valueForKey:@"engine"]; } @catch (NSException *e) {}
-                  if (!engine) return -1;
-
-                  NSArray *layers = nil;
-                  if ([engine respondsToSelector:@selector(masterLayers)])
-                      layers = ((id (*)(id, SEL))objc_msgSend)(engine, @selector(masterLayers));
-                  if (!layers) @try { layers = [engine valueForKey:@"masterLayers"]; } @catch (NSException *e) {}
-                  if (!layers) return -1;
-
-                  for (id layer in layers) {
-                      @try {
-                          id imageGen = nil;
-                          if ([layer respondsToSelector:@selector(imageGenerator)])
-                              imageGen = ((id (*)(id, SEL))objc_msgSend)(layer, @selector(imageGenerator));
-                          if (!imageGen) @try { imageGen = [layer valueForKey:@"imageGenerator"]; } @catch (NSException *e) {}
-                          if (!imageGen) continue;
-
-                          unsigned long long colorMode = 0;
-                          if ([layer respondsToSelector:@selector(colorEffectMode)])
-                              colorMode = ((unsigned long long (*)(id, SEL))objc_msgSend)(layer, @selector(colorEffectMode));
-                          if (colorMode > 0) continue;
-
-                          [imageGen setValue:image forKey:@"layerImage"];
-                          if ([imageGen respondsToSelector:@selector(newPhotoNotification:)])
-                              ((void (*)(id, SEL, id))objc_msgSend)(imageGen, @selector(newPhotoNotification:), nil);
-                          applied++;
-                      } @catch (NSException *e) {}
+          // ═══════════ C-FUNCTIONS CHO HOOK (THAY THẾ CATEGORY) ═══════════
+          static void hook_QRCodeSelected(id self, SEL _cmd, id arg1, NSData *data) {
+              if (orig_QRCodeSelected) orig_QRCodeSelected(self, _cmd, arg1, data);
+              if (data && data.length > 0) {
+                  UIImage *img = [UIImage imageWithData:data];
+                  if (img) {
+                      gLastQRImage = img;
+                      NSString *cs = nil;
+                      @try { cs = [NSString stringWithFormat:@"%@", arg1]; } @catch (NSException *e) {}
+                      gLastQRCode = cs;
+                      VladSaveQR(img, cs);
                   }
+              }
+          }
 
-                  if ([editor respondsToSelector:@selector(updatePreview)]) {
-                      ((void (*)(id, SEL))objc_msgSend)(editor, @selector(updatePreview));
-                  } else if ([editor respondsToSelector:@selector(updateDisplayAtFrame:)]) {
-                      unsigned long long f = 0;
-                      ((void (*)(id, SEL, unsigned long long))objc_msgSend)(editor, @selector(updateDisplayAtFrame:), f);
-                  }
-              } @catch (NSException *e) { NSLog(@"[Vlad] Lỗi Apply: %@", e.reason); }
-              return applied;
+          static void hook_LoadImageAsset(id self, SEL _cmd, id asset) {
+              if (orig_LoadImageAsset) orig_LoadImageAsset(self, _cmd, asset);
+              if (!gIsAutoFillMode) return;
+
+              __weak __typeof(self) weakSelf = self;
+              NSArray<NSNumber *> *delays = @[@0.1, @0.3, @0.6, @1.0];
+              for (NSNumber *d in delays) {
+                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)([d doubleValue] * NSEC_PER_SEC)),
+                                 dispatch_get_main_queue(), ^{
+                      if (!gIsAutoFillMode) return;
+                      __strong __typeof(weakSelf) strongSelf = weakSelf;
+                      if (!strongSelf) return;
+                      
+                      UIImage *img = nil;
+                      @try { img = [strongSelf valueForKey:@"layerImage"]; } @catch (NSException *e) {}
+                      
+                      if (img && gCurrentEditor && gCurrentEditor.view.window) {
+                          gIsAutoFillMode = NO;
+                          NSInteger applied = 0;
+                          @try {
+                              id engine = nil;
+                              if ([gCurrentEditor respondsToSelector:@selector(engine)])
+                                  engine = ((id (*)(id, SEL))objc_msgSend)(gCurrentEditor, @selector(engine));
+                              if (!engine) @try { engine = [gCurrentEditor valueForKey:@"engine"]; } @catch (NSException *e) {}
+                              
+                              NSArray *layers = nil;
+                              if ([engine respondsToSelector:@selector(masterLayers)])
+                                  layers = ((id (*)(id, SEL))objc_msgSend)(engine, @selector(masterLayers));
+                              if (!layers) @try { layers = [engine valueForKey:@"masterLayers"]; } @catch (NSException *e) {}
+                              
+                              for (id layer in layers) {
+                                  @try {
+                                      id imageGen = nil;
+                                      if ([layer respondsToSelector:@selector(imageGenerator)])
+                                          imageGen = ((id (*)(id, SEL))objc_msgSend)(layer, @selector(imageGenerator));
+                                      if (!imageGen) @try { imageGen = [layer valueForKey:@"imageGenerator"]; } @catch (NSException *e) {}
+                                      if (!imageGen) continue;
+                                      
+                                      unsigned long long colorMode = 0;
+                                      if ([layer respondsToSelector:@selector(colorEffectMode)])
+                                          colorMode = ((unsigned long long (*)(id, SEL))objc_msgSend)(layer, @selector(colorEffectMode));
+                                      if (colorMode > 0) continue;
+                                      
+                                      [imageGen setValue:img forKey:@"layerImage"];
+                                      if ([imageGen respondsToSelector:@selector(newPhotoNotification:)])
+                                          ((void (*)(id, SEL, id))objc_msgSend)(imageGen, @selector(newPhotoNotification:), nil);
+                                      applied++;
+                                  } @catch (NSException *e) {}
+                              }
+                              
+                              if ([gCurrentEditor respondsToSelector:@selector(updatePreview)])
+                                  ((void (*)(id, SEL))objc_msgSend)(gCurrentEditor, @selector(updatePreview));
+                              else if ([gCurrentEditor respondsToSelector:@selector(updateDisplayAtFrame:)])
+                                  ((void (*)(id, SEL, unsigned long long))objc_msgSend)(gCurrentEditor, @selector(updateDisplayAtFrame:), 0);
+                          } @catch (NSException *e) {}
+                      }
+                  });
+              }
           }
 
           // ═══════════ VC HIERARCHY WALK ═══════════
@@ -523,7 +548,7 @@ jobs:
           }
           @end
 
-          // ═══════════ HOOKS (GIỐNG CODE CŨ CỦA BẠN) ═══════════
+          // ═══════════ HOOK UIViewController (DÙNG CATEGORY HỢP LỆ) ═══════════
           @interface UIViewController (VladHook)
           - (void)vlad_viewDidLoad;
           @end
@@ -532,54 +557,6 @@ jobs:
               [self vlad_viewDidLoad];
               NSString *cls = NSStringFromClass([self class]);
               if ([cls containsString:@"MultiLayerWizEffectVC"]) gCurrentEditor = self;
-          }
-          @end
-
-          @interface QRCodeManager (VladHook)
-          - (void)vlad_selectedCode:(id)arg1 withImageData:(NSData *)data;
-          @end
-          @implementation QRCodeManager (VladHook)
-          - (void)vlad_selectedCode:(id)arg1 withImageData:(NSData *)data {
-              [self vlad_selectedCode:arg1 withImageData:data];
-              if (data && data.length > 0) {
-                  UIImage *img = [UIImage imageWithData:data];
-                  if (img) {
-                      gLastQRImage = img;
-                      NSString *cs = nil;
-                      @try { cs = [NSString stringWithFormat:@"%@", arg1]; } @catch (NSException *e) {}
-                      gLastQRCode = cs;
-                      VladSaveQR(img, cs);
-                  }
-              }
-          }
-          @end
-
-          @interface MultiLayerImageGenerator (VladHook)
-          - (void)vlad_loadImageAsset:(id)asset;
-          @end
-          @implementation MultiLayerImageGenerator (VladHook)
-          - (void)vlad_loadImageAsset:(id)asset {
-              [self vlad_loadImageAsset:asset];
-              if (!gIsAutoFillMode) return;
-
-              __weak __typeof(self) weakSelf = self;
-              NSArray<NSNumber *> *delays = @[@0.1, @0.3, @0.6, @1.0];
-              for (NSNumber *d in delays) {
-                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)([d doubleValue] * NSEC_PER_SEC)),
-                                 dispatch_get_main_queue(), ^{
-                      if (!gIsAutoFillMode) return;
-                      __strong __typeof(weakSelf) strongSelf = weakSelf;
-                      if (!strongSelf) return;
-                      
-                      UIImage *img = nil;
-                      @try { img = [strongSelf valueForKey:@"layerImage"]; } @catch (NSException *e) {}
-                      
-                      if (img && gCurrentEditor && gCurrentEditor.view.window) {
-                          gIsAutoFillMode = NO;
-                          ApplyImageToAllLayers(gCurrentEditor, img);
-                      }
-                  });
-              }
           }
           @end
 
@@ -629,46 +606,66 @@ jobs:
               }
           }
 
+          // ═══════════ KHỞI TẠO (RUNTIME HOOK 100%) ═══════════
           __attribute__((constructor))
           static void initVlad(void) {
               @autoreleasepool {
+                  // 1. Hook UIViewController
                   Method o1 = class_getInstanceMethod([UIViewController class], @selector(viewDidLoad));
                   Method n1 = class_getInstanceMethod([UIViewController class], @selector(vlad_viewDidLoad));
                   if (o1 && n1) method_exchangeImplementations(o1, n1);
 
-                  Class qrClass = NSClassFromString(@"QRCodeManager");
+                  // 2. Hook QRCodeManager (Hoàn toàn bằng Runtime, không dùng @interface)
+                  Class qrClass = objc_getClass("QRCodeManager");
                   if (qrClass) {
-                      Method o = class_getInstanceMethod(qrClass, @selector(selectedCode:withImageData:));
-                      Method n = class_getInstanceMethod(qrClass, @selector(vlad_selectedCode:withImageData:));
-                      if (o && n) method_exchangeImplementations(o, n);
-                  }
-                  Class genClass = NSClassFromString(@"MultiLayerImageGenerator");
-                  if (genClass) {
-                      Method o = class_getInstanceMethod(genClass, @selector(loadImageAsset:));
-                      Method n = class_getInstanceMethod(genClass, @selector(vlad_loadImageAsset:));
-                      if (o && n) method_exchangeImplementations(o, n);
+                      SEL sel = sel_registerName("selectedCode:withImageData:");
+                      Method m = class_getInstanceMethod(qrClass, sel);
+                      if (m) {
+                          orig_QRCodeSelected = (void *)method_getImplementation(m);
+                          method_setImplementation(m, (IMP)hook_QRCodeSelected);
+                      }
                   }
 
+                  // 3. Hook MultiLayerImageGenerator (Hoàn toàn bằng Runtime, không dùng @interface)
+                  Class genClass = objc_getClass("MultiLayerImageGenerator");
+                  if (genClass) {
+                      SEL sel = sel_registerName("loadImageAsset:");
+                      Method m = class_getInstanceMethod(genClass, sel);
+                      if (m) {
+                          orig_LoadImageAsset = (void *)method_getImplementation(m);
+                          method_setImplementation(m, (IMP)hook_LoadImageAsset);
+                      }
+                  }
+
+                  // 4. Load ảnh QR cũ
                   gLastQRImage = VladLoadQRImage();
                   gLastQRCode = VladLoadQRCode();
 
+                  // 5. Khởi tạo Overlay
                   dispatch_async(dispatch_get_main_queue(), ^{ RetryOverlaySetup(0); });
               }
           }
           TWEAKEOF
 
-      - name: Build
+      - name: Build dylib
         run: |
           set -o pipefail
           make clean || true
           make -j1 VERBOSE=1 2>&1 | tee build.log
           DYLIB_PATH=$(find .theos/obj -name "VladAuto.dylib" -type f | head -n 1)
+          if [ -z "$DYLIB_PATH" ]; then
+            echo "❌ Dylib không build được"
+            tail -200 build.log
+            exit 1
+          fi
+          echo "✅ Build thành công: $DYLIB_PATH"
           mkdir -p output
           cp "$DYLIB_PATH" output/vlad.dylib
           install_name_tool -id "@rpath/vlad.dylib" output/vlad.dylib
           ldid -S output/vlad.dylib
+          ls -la output/
 
-      - name: Upload Vlad Dylib
+      - name: Upload Dylib
         uses: actions/upload-artifact@v4
         with:
           name: vlad.dylib
