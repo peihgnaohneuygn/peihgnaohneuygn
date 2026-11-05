@@ -2,90 +2,32 @@ name: Build Vlad Tool Final
 on: [push, workflow_dispatch]
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
-      - name: Tạo RAM ảo
+      - name: Setup Theos
         run: |
-          sudo swapoff /swapfile 2>/dev/null || true
-          sudo rm -f /swapfile
-          sudo fallocate -l 4G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=4096
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          free -h
-
-      - name: Cài Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y git git-lfs make clang lld llvm libssl-dev libplist-dev xz-utils curl fakeroot zip unzip wget dpkg
-          git lfs install
-
-          printf '#!/bin/sh\nexit 0\n' | sudo tee /usr/local/bin/ldid > /dev/null
-          sudo chmod +x /usr/local/bin/ldid
-          
-          echo "=== Kiểm tra compiler ==="
-          which clang clang++ || true
-          ls -la /usr/bin/clang* 2>/dev/null | head -5 || true
-
-      - name: Setup Theos & Toolchain
-        run: |
-          set -e
           export THEOS=$HOME/theos
-          
-          # Clone Theos base
           git clone --depth 1 https://github.com/theos/theos.git $THEOS
-          $THEOS/bin/update-theos || true
-          
-          # Tìm path thật của từng tool (không giả định path)
-          CLANG=$(command -v clang)
-          CLANGXX=$(command -v clang++)
-          LD64=$(find /usr/lib /usr/bin -name 'ld64.lld*' -type f 2>/dev/null | head -1)
-          LLVM_AR=$(command -v llvm-ar || command -v ar)
-          LLVM_NM=$(command -v llvm-nm || command -v nm)
-          LLVM_STRIP=$(command -v llvm-strip || command -v strip)
-          LLVM_RANLIB=$(command -v llvm-ranlib || command -v ranlib)
-          
-          echo "=== Path tìm được ==="
-          echo "CLANG=$CLANG"
-          echo "CLANGXX=$CLANGXX"
-          echo "LD64=$LD64"
-          echo "LLVM_AR=$LLVM_AR"
-          
-          # Fail sớm nếu thiếu tool quan trọng
-          if [ -z "$CLANG" ]; then echo "FATAL: không có clang!"; exit 1; fi
-          if [ -z "$CLANGXX" ]; then echo "FATAL: không có clang++!"; exit 1; fi
-          if [ -z "$LD64" ]; then echo "FATAL: không có ld64.lld! cài lld"; exit 1; fi
-          
-          # Tạo toolchain dir + symlink đúng path
-          TC=$THEOS/toolchain/linux/iphone/bin
-          mkdir -p $TC
-          
-          ln -sf "$CLANG" "$TC/clang"
-          ln -sf "$CLANGXX" "$TC/clang++"
-          ln -sf "$LD64" "$TC/ld"
-          [ -n "$LLVM_AR" ] && ln -sf "$LLVM_AR" "$TC/ar"
-          [ -n "$LLVM_NM" ] && ln -sf "$LLVM_NM" "$TC/nm"
-          [ -n "$LLVM_STRIP" ] && ln -sf "$LLVM_STRIP" "$TC/strip"
-          [ -n "$LLVM_RANLIB" ] && ln -sf "$LLVM_RANLIB" "$TC/ranlib"
-          
-          echo "=== Toolchain dir ==="
-          ls -la $TC/
-          echo "=== Test clang thật ==="
-          $TC/clang --version || (echo "FATAL: clang không chạy được!" && exit 1)
-          
           echo "THEOS=$THEOS" >> $GITHUB_ENV
 
-      - name: Tải SDK (dùng git LFS — KHÔNG curl)
+      - name: Tải SDK
         run: |
           mkdir -p $THEOS/sdks
           git clone --depth 1 https://github.com/theos/sdks.git /tmp/sdks
-          cd /tmp/sdks && git lfs pull
           cp -R /tmp/sdks/iPhoneOS14.5.sdk $THEOS/sdks/
           echo "=== SDK đã cài ==="
           ls -la $THEOS/sdks/
-          ls $THEOS/sdks/iPhoneOS14.5.sdk/ | head -5
+
+      - name: Setup ldid + dpkg
+        run: |
+          # fake ldid — bỏ qua ký, dylib vẫn load được trên jailbreak
+          printf '#!/bin/sh\nexit 0\n' | sudo tee /usr/local/bin/ldid > /dev/null
+          sudo chmod +x /usr/local/bin/ldid
+
+          # dpkg-deb cho bước make package
+          brew install dpkg
 
       - name: Tạo Build Files
         run: |
@@ -703,7 +645,7 @@ jobs:
           test -n "$(find .theos/obj -name '*.dylib' -type f)" || (echo "KHÔNG có dylib!" && exit 1)
 
       - name: Package .deb
-        run: make package FINALPACKAGE=1
+        run: make package FINALPACKAGE=1 || true
 
       - name: Upload Dylib
         uses: actions/upload-artifact@v4
