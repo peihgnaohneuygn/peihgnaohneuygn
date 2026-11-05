@@ -1,4 +1,4 @@
-name: Build Vlad Tool Debug
+name: Build Vlad Dump
 on: [push, workflow_dispatch]
 jobs:
   build:
@@ -41,104 +41,64 @@ jobs:
           #import <UIKit/UIKit.h>
           #import <objc/runtime.h>
 
-          static UIWindow *gOverlayWindow = nil;
-
-          @interface VSPassthroughWindow : UIWindow
-          @end
-          @implementation VSPassthroughWindow
-          - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-              UIView *hitView = [super hitTest:point withEvent:event];
-              if (hitView == self || hitView == self.rootViewController.view) return nil;
-              return hitView;
-          }
+          @interface VladDumpManager : NSObject
+          + (void)startDump;
           @end
 
-          // ==========================================
-          // HÀM QUÉT TOÀN BỘ CLASS & HÀM CỦA APP
-          // ==========================================
-          static void ScanCurrentScreen() {
-              UIWindow *keyWin = [UIApplication sharedApplication].keyWindow;
-              UIViewController *topVC = keyWin.rootViewController;
-              while (topVC.presentedViewController) {
-                  topVC = topVC.presentedViewController;
-              }
-              
-              NSMutableString *log = [NSMutableString stringWithString:@"=== CLASS ĐANG MỞ ===\n"];
-              [log appendFormat:@"%@\n\n", NSStringFromClass([topVC class])];
-              
-              [log appendString:@"--- CÁC HÀM CỦA MÀN HÌNH NÀY ---\n"];
-              unsigned int count;
-              Method *methods = class_copyMethodList([topVC class], &count);
-              for (int i = 0; i < count; i++) {
-                  [log appendFormat:@"- %s\n", sel_getName(method_getName(methods[i]))];
-              }
-              free(methods);
-              
-              [log appendString:@"\n--- CÁC CLASS VIDEO STAR ĐANG TẢI ---\n"];
-              int numClasses = objc_getClassList(NULL, 0);
-              Class *classes = (__unsafe_unretained Class *)malloc(sizeof(Class) * numClasses);
-              numClasses = objc_getClassList(classes, numClasses);
-              for (int i = 0; i < numClasses; i++) {
-                  NSString *clsName = NSStringFromClass(classes[i]);
-                  if ([clsName hasPrefix:@"VS"] || [clsName containsString:@"Editor"] || [clsName containsString:@"Layer"] || [clsName containsString:@"Split"]) {
-                      [log appendFormat:@"%@\n", clsName];
+          @implementation VladDumpManager
+          + (void)startDump {
+              dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                  NSMutableString *log = [NSMutableString string];
+                  [log appendString:@"=== VLAD FULL DUMP ===\n\n"];
+
+                  int numClasses = objc_getClassList(NULL, 0);
+                  Class *classes = (__unsafe_unretained Class *)malloc(sizeof(Class) * numClasses);
+                  numClasses = objc_getClassList(classes, numClasses);
+
+                  for (int i = 0; i < numClasses; i++) {
+                      Class cls = classes[i];
+                      NSString *clsName = NSStringFromClass(cls);
+                      
+                      // Chỉ lấy class của Video Star hoặc các class liên quan đến Editor/Layer/Scene
+                      if ([clsName hasPrefix:@"VS"] || [clsName containsString:@"Editor"] || [clsName containsString:@"Layer"] || [clsName containsString:@"Scene"] || [clsName containsString:@"Media"]) {
+                          [log appendFormat:@"\n@interface %@\n", clsName];
+                          
+                          unsigned int methodCount;
+                          Method *methods = class_copyMethodList(cls, &methodCount);
+                          for (int j = 0; j < methodCount; j++) {
+                              [log appendFormat:@"- (%s)%s\n", 
+                                  method_copyReturnType(methods[j]), 
+                                  sel_getName(method_getName(methods[j]))];
+                          }
+                          free(methods);
+                          [log appendString:@"@end\n"];
+                      }
                   }
-              }
-              free(classes);
-              
-              // Hiển thị bảng cho mày copy
-              UIViewController *textVC = [[UIViewController alloc] init];
-              textVC.view.backgroundColor = [UIColor blackColor];
-              
-              UITextView *tv = [[UITextView alloc] initWithFrame:textVC.view.bounds];
-              tv.text = log;
-              tv.textColor = [UIColor greenColor];
-              tv.backgroundColor = [UIColor blackColor];
-              tv.font = [UIFont fontWithName:@"Courier" size:12];
-              tv.editable = NO;
-              [textVC.view addSubview:tv];
-              
-              UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-              closeBtn.frame = CGRectMake(20, 50, 80, 40);
-              [closeBtn setTitle:@"ĐÓNG" forState:UIControlStateNormal];
-              [closeBtn setTitleColor:[UIColor redColor] forState:UIControlStateNormal];
-              [closeBtn addTarget:textVC action:@selector(dismissViewControllerAnimated:completion:) forControlEvents:UIControlEventTouchUpInside];
-              [textVC.view addSubview:closeBtn];
-              
-              [topVC presentViewController:textVC animated:YES completion:nil];
+                  free(classes);
+
+                  // Lưu ra file trong thư mục Documents của app
+                  NSString *docsDir = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+                  NSString *filePath = [docsDir stringByAppendingPathComponent:@"VladDump.txt"];
+                  [log writeToFile:filePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+                  
+                  dispatch_async(dispatch_get_main_queue(), ^{
+                      // Hiện thông báo đường dẫn file
+                      UIWindow *win = [UIApplication sharedApplication].windows.firstObject;
+                      UIAlertController *al = [UIAlertController alertControllerWithTitle:@"DUMP THÀNH CÔNG" 
+                                                                                 message:[NSString stringWithFormat:@"File lưu tại:\n%@", filePath] 
+                                                                          preferredStyle:UIAlertControllerStyleAlert];
+                      [al addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                      [win.rootViewController presentViewController:al animated:YES completion:nil];
+                  });
+              });
           }
+          @end
 
           __attribute__((constructor))
           static void initVlad() {
               @autoreleasepool {
-                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.0 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-                      if (!gOverlayWindow) {
-                          gOverlayWindow = [[VSPassthroughWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-                          gOverlayWindow.windowLevel = UIWindowLevelAlert + 10;
-                          gOverlayWindow.backgroundColor = [UIColor clearColor];
-                          gOverlayWindow.rootViewController = [[UIViewController alloc] init];
-                          gOverlayWindow.rootViewController.view.backgroundColor = [UIColor clearColor];
-                          gOverlayWindow.hidden = NO;
-                          
-                          // Nút Quét
-                          UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
-                          btn.frame = CGRectMake(20, 100, 80, 80);
-                          btn.backgroundColor = [UIColor redColor];
-                          btn.layer.cornerRadius = 40;
-                          btn.layer.borderWidth = 2.0;
-                          btn.layer.borderColor = [UIColor whiteColor].CGColor;
-                          [btn setTitle:@"QUÉT" forState:UIControlStateNormal];
-                          [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-                          btn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
-                          [btn addTarget:gOverlayWindow.rootViewController action:NSSelectorFromString(@"dummy") forControlEvents:UIControlEventTouchUpInside];
-                          
-                          // Gắn action bằng block để không cần tạo class
-                          [btn addAction:[UIAction actionWithHandler:^(__kindof UIAction * _Nonnull action) {
-                              ScanCurrentScreen();
-                          }] forControlEvents:UIControlEventTouchUpInside];
-                          
-                          [gOverlayWindow.rootViewController.view addSubview:btn];
-                      }
+                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2.0 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                      [VladDumpManager startDump];
                   });
               }
           }
@@ -151,13 +111,13 @@ jobs:
           make -j1 VERBOSE=1 2>&1 | tee build.log
           DYLIB_PATH=$(find .theos/obj -name "VladAuto.dylib" -type f | head -n 1)
           mkdir -p output
-          cp "$DYLIB_PATH" output/vlad_debug.dylib
-          install_name_tool -id "@rpath/vlad_debug.dylib" output/vlad_debug.dylib
-          ldid -S output/vlad_debug.dylib
+          cp "$DYLIB_PATH" output/vlad_dump.dylib
+          install_name_tool -id "@rpath/vlad_dump.dylib" output/vlad_dump.dylib
+          ldid -S output/vlad_dump.dylib
 
       - name: Upload Vlad Dylib
         uses: actions/upload-artifact@v4
         with:
-          name: vlad_debug
-          path: output/vlad_debug.dylib
+          name: vlad_dump
+          path: output/vlad_dump.dylib
           if-no-files-found: error
