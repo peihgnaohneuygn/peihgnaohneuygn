@@ -56,14 +56,26 @@ jobs:
           static NSArray<NSNumber *> *gDetectedBeats = nil;
           static double gDetectedBPM = 0;
           static id gTimeObserver = nil;
-          static BOOL gIsAutoFillMode = NO;
 
           static void searchImageViews(UIView *parent, NSMutableArray *array);
           static void autoFillSmart(UIViewController *editor);
           static void autoSplitEditor(UIViewController *editor, NSArray<NSNumber *> *beats);
 
           // ==========================================
-          // UI THEME (GLASSMORPHISM & NEON)
+          // PASSTHROUGH WINDOW (XUYÊN CHẠM)
+          // ==========================================
+          @interface VSPassthroughWindow : UIWindow
+          @end
+          @implementation VSPassthroughWindow
+          - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+              UIView *hitView = [super hitTest:point withEvent:event];
+              if (hitView == self || hitView == self.rootViewController.view) return nil;
+              return hitView;
+          }
+          @end
+
+          // ==========================================
+          // UI THEME
           // ==========================================
           @interface VladUI : NSObject
           + (UIColor *)neonCyan;
@@ -231,7 +243,7 @@ jobs:
           @end
 
           // ==========================================
-          // MENU GIAO DIỆN (KÍNH MỜ NEON)
+          // MENU VIEW (TỐI GIẢN, BO GÓC MỀM)
           // ==========================================
           @interface VladMenuView : UIView <PHPickerViewControllerDelegate, UIDocumentPickerDelegate>
           @property (nonatomic, strong) UIView *panel;
@@ -255,76 +267,64 @@ jobs:
               return self;
           }
           - (void)setupUI {
-              self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.5];
+              self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.6];
               
-              CGFloat width = 320, height = 450;
+              CGFloat width = 310, height = 440;
               self.panel = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, height)];
               self.panel.center = self.center;
-              self.panel.layer.cornerRadius = 24;
-              self.panel.clipsToBounds = YES;
-              
-              // Glassmorphism background
-              UIVisualEffectView *blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleDark]];
-              blur.frame = self.panel.bounds;
-              [self.panel addSubview:blur];
-              
-              // Gradient Border
-              CAGradientLayer *border = [VladUI gradientLayerForBounds:self.panel.bounds];
-              border.cornerRadius = 24;
-              CAShapeLayer *mask = [CAShapeLayer layer];
-              mask.path = [UIBezierPath bezierPathWithRoundedRect:self.panel.bounds cornerRadius:24].CGPath;
-              border.mask = mask;
-              [self.panel.layer addSublayer:border];
-              
-              UIView *inner = [[UIView alloc] initWithFrame:CGRectInset(self.panel.bounds, 1.5, 1.5)];
-              inner.backgroundColor = [UIColor colorWithWhite:0.05 alpha:0.6];
-              inner.layer.cornerRadius = 22.5;
-              [self.panel addSubview:inner];
-
+              self.panel.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.1 alpha:0.95];
+              self.panel.layer.cornerRadius = 20;
+              self.panel.layer.borderWidth = 1.5;
+              self.panel.layer.borderColor = [VladUI neonCyan].CGColor;
+              self.panel.layer.shadowColor = [VladUI neonCyan].CGColor;
+              self.panel.layer.shadowRadius = 15;
+              self.panel.layer.shadowOpacity = 0.4;
+              self.panel.layer.shadowOffset = CGSizeZero;
               [self addSubview:self.panel];
 
               // Header
-              UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(24, 24, width-48, 30)];
+              UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(20, 20, width-40, 28)];
               title.text = @"VLAD LIMITED";
               title.textColor = [UIColor whiteColor];
-              title.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:22];
-              [inner addSubview:title];
+              title.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:20];
+              [self.panel addSubview:title];
 
-              UILabel *subtitle = [[UILabel alloc] initWithFrame:CGRectMake(24, 50, width-48, 20)];
+              UILabel *subtitle = [[UILabel alloc] initWithFrame:CGRectMake(20, 46, width-40, 18)];
               subtitle.text = @"Sống Bằng Tình Cảm 5.0";
               subtitle.textColor = [VladUI neonCyan];
-              subtitle.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-              [inner addSubview:subtitle];
+              subtitle.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
+              [self.panel addSubview:subtitle];
 
               UIButton *close = [UIButton buttonWithType:UIButtonTypeCustom];
-              close.frame = CGRectMake(width - 44, 24, 30, 30);
-              [close setImage:[VladUI iconWithName:@"xmark.circle.fill" size:24 color:[UIColor grayColor]] forState:UIControlStateNormal];
+              close.frame = CGRectMake(width - 44, 20, 30, 30);
+              [close setImage:[VladUI iconWithName:@"xmark.circle.fill" size:22 color:[UIColor grayColor]] forState:UIControlStateNormal];
               [close addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
-              [inner addSubview:close];
+              [self.panel addSubview:close];
 
-              UIView *tabBar = [[UIView alloc] initWithFrame:CGRectMake(24, 85, width-48, 40)];
-              tabBar.backgroundColor = [UIColor colorWithWhite:1 alpha:0.08];
-              tabBar.layer.cornerRadius = 12;
-              [inner addSubview:tabBar];
+              // Tabs
+              UIView *tabBar = [[UIView alloc] initWithFrame:CGRectMake(20, 80, width-40, 36)];
+              tabBar.backgroundColor = [UIColor colorWithWhite:1 alpha:0.05];
+              tabBar.layer.cornerRadius = 10;
+              [self.panel addSubview:tabBar];
 
               NSArray *titles = @[@"TRANG CHỦ", @"CHỨC NĂNG", @"TÁC GIẢ"];
               self.tabButtons = [NSMutableArray array];
               for (int i=0; i<3; i++) {
                   UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
-                  btn.frame = CGRectMake(i * (width-48)/3.0, 0, (width-48)/3.0, 40);
+                  btn.frame = CGRectMake(i * (width-40)/3.0, 0, (width-40)/3.0, 36);
                   [btn setTitle:titles[i] forState:UIControlStateNormal];
                   [btn setTitleColor:[UIColor grayColor] forState:UIControlStateNormal];
                   [btn setTitleColor:[UIColor blackColor] forState:UIControlStateSelected];
-                  btn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
+                  btn.titleLabel.font = [UIFont boldSystemFontOfSize:10];
                   btn.tag = i;
-                  btn.layer.cornerRadius = 12;
+                  btn.layer.cornerRadius = 10;
                   [btn addTarget:self action:@selector(tabTapped:) forControlEvents:UIControlEventTouchUpInside];
                   [tabBar addSubview:btn];
                   [self.tabButtons addObject:btn];
               }
 
-              self.contentView = [[UIView alloc] initWithFrame:CGRectMake(24, 140, width-48, 280)];
-              [inner addSubview:self.contentView];
+              self.contentView = [[UIView alloc] initWithFrame:CGRectMake(20, 130, width-40, 290)];
+              [self.panel addSubview:self.contentView];
 
               [self tabTapped:self.tabButtons[0]];
           }
@@ -332,7 +332,9 @@ jobs:
           - (void)tabTapped:(UIButton *)sender {
               for (UIButton *b in self.tabButtons) {
                   b.selected = NO;
-                  for (CALayer *layer in b.layer.sublayers) {
+                  // Fix crash: copy array before enumerating
+                  NSArray *sublayers = [b.layer.sublayers copy];
+                  for (CALayer *layer in sublayers) {
                       if ([layer isKindOfClass:[CAGradientLayer class]]) [layer removeFromSuperlayer];
                   }
                   [b setTitleColor:[UIColor grayColor] forState:UIControlStateNormal];
@@ -340,7 +342,7 @@ jobs:
               sender.selected = YES;
               
               CAGradientLayer *grad = [VladUI gradientLayerForBounds:sender.bounds];
-              grad.cornerRadius = 12;
+              grad.cornerRadius = 10;
               [sender.layer insertSublayer:grad atIndex:0];
               [sender setTitleColor:[UIColor blackColor] forState:UIControlStateSelected];
 
@@ -354,7 +356,7 @@ jobs:
                   UILabel *lbl = [[UILabel alloc] initWithFrame:self.contentView.bounds];
                   lbl.numberOfLines = 0;
                   lbl.textColor = [UIColor lightGrayColor];
-                  lbl.font = [UIFont systemFontOfSize:14];
+                  lbl.font = [UIFont systemFontOfSize:13];
                   lbl.textAlignment = NSTextAlignmentCenter;
                   lbl.text = @"Chào mừng He đến với Vlad Limited.\n\nCông cụ hỗ trợ edit Video Star tối ưu & thông minh nhất.\n\nVui lòng chuyển sang tab CHỨC NĂNG để bắt đầu trải nghiệm.";
                   [self.contentView addSubview:lbl];
@@ -367,9 +369,9 @@ jobs:
                       UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
                       btn.frame = CGRectMake(0, i*90, self.contentView.bounds.size.width, 75);
                       btn.backgroundColor = [UIColor colorWithWhite:1 alpha:0.05];
-                      btn.layer.cornerRadius = 16;
+                      btn.layer.cornerRadius = 12;
                       btn.layer.borderWidth = 1.0;
-                      btn.layer.borderColor = [[VladUI neonCyan] colorWithAlphaComponent:0.4].CGColor;
+                      btn.layer.borderColor = [[VladUI neonCyan] colorWithAlphaComponent:0.3].CGColor;
                       btn.tag = i;
                       
                       UIImageView *iconView = [[UIImageView alloc] initWithFrame:CGRectMake(16, 25, 24, 24)];
@@ -380,7 +382,7 @@ jobs:
                       UILabel *titleLbl = [[UILabel alloc] initWithFrame:CGRectMake(52, 25, btn.bounds.size.width-60, 24)];
                       titleLbl.text = titles[i];
                       titleLbl.textColor = [UIColor whiteColor];
-                      titleLbl.font = [UIFont boldSystemFontOfSize:15];
+                      titleLbl.font = [UIFont boldSystemFontOfSize:14];
                       [btn addSubview:titleLbl];
                       
                       [btn addTarget:self action:@selector(funcTapped:) forControlEvents:UIControlEventTouchUpInside];
@@ -392,7 +394,7 @@ jobs:
                   lbl.numberOfLines = 0;
                   lbl.textColor = [VladUI neonPurple];
                   lbl.textAlignment = NSTextAlignmentCenter;
-                  lbl.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+                  lbl.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
                   lbl.text = @"Chủ sở hữu: Vlad\nNgười sáng tạo: Vlad\n\nLƯU Ý:\nNghiêm cấm trộm code, leak tool dưới mọi hình thức!";
                   [self.contentView addSubview:lbl];
               }
@@ -408,7 +410,7 @@ jobs:
                       UIImageView *iv = [[UIImageView alloc] initWithImage:gLastQRImage];
                       iv.frame = CGRectInset(blurView.bounds, 30, 100);
                       iv.contentMode = UIViewContentModeScaleAspectFit;
-                      iv.layer.cornerRadius = 16;
+                      iv.layer.cornerRadius = 12;
                       iv.clipsToBounds = YES;
                       [blurView addSubview:iv];
                       
@@ -418,22 +420,26 @@ jobs:
                       [close setTitleColor:[UIColor blackColor] forState:UIControlStateNormal];
                       close.backgroundColor = [VladUI neonCyan];
                       close.layer.cornerRadius = 22;
-                      close.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+                      close.titleLabel.font = [UIFont boldSystemFontOfSize:15];
                       [close addTarget:self action:@selector(closeBlur:) forControlEvents:UIControlEventTouchUpInside];
                       [blurView addSubview:close];
                       
                       [self addSubview:blurView];
                   } else {
-                      [self showAlert:@"Thông báo" msg:@"Chưa có ảnh Code nào được lưu trong phiên này."];
+                      [self showAlert:@"Thông báo" msg:@"Chưa có ảnh Code nào được lưu. Hãy chọn ảnh trong Video Star trước."];
                   }
               } else if (sender.tag == 1) {
-                  gIsAutoFillMode = YES;
                   PHPickerConfiguration *config = [[PHPickerConfiguration alloc] init];
                   config.filter = [PHPickerFilter imagesFilter];
                   config.selectionLimit = 1;
                   PHPickerViewController *picker = [[PHPickerViewController alloc] initWithConfiguration:config];
                   picker.delegate = self;
-                  [self.window.rootViewController presentViewController:picker animated:YES completion:nil];
+                  
+                  UIWindow *keyWin = nil;
+                  for (UIWindow *w in [UIApplication sharedApplication].windows) {
+                      if (!w.hidden && w.rootViewController && w != gOverlayWindow) { keyWin = w; break; }
+                  }
+                  [keyWin.rootViewController presentViewController:picker animated:YES completion:nil];
               } else if (sender.tag == 2) {
                   if (gCurrentAudioURL) {
                       [self analyzeAudio:gCurrentAudioURL];
@@ -448,7 +454,11 @@ jobs:
           - (void)pickAudioFile {
               UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeAudio]];
               picker.delegate = self;
-              [self.window.rootViewController presentViewController:picker animated:YES completion:nil];
+              UIWindow *keyWin = nil;
+              for (UIWindow *w in [UIApplication sharedApplication].windows) {
+                  if (!w.hidden && w.rootViewController && w != gOverlayWindow) { keyWin = w; break; }
+              }
+              [keyWin.rootViewController presentViewController:picker animated:YES completion:nil];
           }
 
           - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
@@ -484,13 +494,10 @@ jobs:
                       [provider loadObjectOfClass:[UIImage class] completionHandler:^(id<NSItemProviderReading> _Nullable image, NSError * _Nullable error) {
                           if (image) {
                               gLastQRImage = (UIImage *)image;
-                              if (gIsAutoFillMode) {
-                                  gIsAutoFillMode = NO;
-                                  dispatch_async(dispatch_get_main_queue(), ^{
-                                      autoFillSmart(gCurrentEditor);
-                                      [self showAlert:@"Thành công" msg:@"Đã tự động nhập ảnh vào tất cả lớp hình ảnh!"];
-                                  });
-                              }
+                              dispatch_async(dispatch_get_main_queue(), ^{
+                                  autoFillSmart(gCurrentEditor);
+                                  [self showAlert:@"Thành công" msg:@"Đã tự động nhập ảnh vào tất cả lớp hình ảnh!"];
+                              });
                           }
                       }];
                   }
@@ -535,7 +542,7 @@ jobs:
           @end
 
           // ==========================================
-          // LOGO OVERLAY (NEON GLOW)
+          // LOGO OVERLAY
           // ==========================================
           @interface VladLogoView : UIView
           - (void)logoTapped;
@@ -582,27 +589,8 @@ jobs:
           @end
 
           // ==========================================
-          // HOOKS & SWIZZLING (KHÔNG CẦN SUBSTRATE)
+          // HOOKS & SWIZZLING
           // ==========================================
-          @interface PHPickerViewController (VladHook)
-          - (void)vlad_picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results;
-          @end
-          @implementation PHPickerViewController (VladHook)
-          - (void)vlad_picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
-              [self vlad_picker:picker didFinishPicking:results];
-              @try {
-                  if (results.count > 0 && !gIsAutoFillMode) {
-                      NSItemProvider *provider = results.firstObject.itemProvider;
-                      if ([provider canLoadObjectOfClass:[UIImage class]]) {
-                          [provider loadObjectOfClass:[UIImage class] completionHandler:^(id<NSItemProviderReading> _Nullable image, NSError * _Nullable error) {
-                              if (image) { gLastQRImage = (UIImage *)image; }
-                          }];
-                      }
-                  }
-              } @catch (NSException *e) {}
-          }
-          @end
-
           @interface UIViewController (VladHook)
           - (void)vlad_viewDidLoad;
           @end
@@ -631,7 +619,7 @@ jobs:
           @end
 
           // ==========================================
-          // XỬ LÝ CHỨC NĂNG THÔNG MINH
+          // XỬ LÝ CHỨC NĂNG
           // ==========================================
           static void autoFillSmart(UIViewController *editor) {
               if (!editor || !gLastQRImage) return;
@@ -639,8 +627,7 @@ jobs:
                   NSMutableArray *imageViews = [NSMutableArray array];
                   searchImageViews(editor.view, imageViews);
                   for (UIImageView *iv in imageViews) {
-                      // Chỉ nhập vào các lớp có hình ảnh thực sự và kích thước > 50x50
-                      // Tự động bỏ qua lớp trống (image nil), lớp màu, và icon nhỏ
+                      // Chỉ nhập vào lớp có hình ảnh, kích thước > 50x50. Bỏ qua lớp trống, icon nhỏ.
                       if (iv.image != nil && iv.bounds.size.width > 50 && iv.bounds.size.height > 50) {
                           iv.image = gLastQRImage;
                       }
@@ -658,7 +645,6 @@ jobs:
           static void autoSplitEditor(UIViewController *editor, NSArray<NSNumber *> *beats) {
               if (!editor || beats.count == 0) return;
               @try {
-                  // Dò tìm hàm chia cảnh (split/cut) động trong Editor
                   unsigned int count;
                   Method *methods = class_copyMethodList([editor class], &count);
                   SEL splitSel = NULL;
@@ -690,10 +676,6 @@ jobs:
           __attribute__((constructor))
           static void initVlad() {
               @autoreleasepool {
-                  Method orig1 = class_getInstanceMethod([PHPickerViewController class], @selector(picker:didFinishPicking:));
-                  Method new1 = class_getInstanceMethod([PHPickerViewController class], @selector(vlad_picker:didFinishPicking:));
-                  if (orig1 && new1) method_exchangeImplementations(orig1, new1);
-
                   Method orig2 = class_getInstanceMethod([UIViewController class], @selector(viewDidLoad));
                   Method new2 = class_getInstanceMethod([UIViewController class], @selector(vlad_viewDidLoad));
                   if (orig2 && new2) method_exchangeImplementations(orig2, new2);
@@ -704,7 +686,7 @@ jobs:
 
                   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.0 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
                       if (!gOverlayWindow) {
-                          gOverlayWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+                          gOverlayWindow = [[VSPassthroughWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
                           gOverlayWindow.windowLevel = UIWindowLevelAlert + 10;
                           gOverlayWindow.backgroundColor = [UIColor clearColor];
                           gOverlayWindow.rootViewController = [[UIViewController alloc] init];
