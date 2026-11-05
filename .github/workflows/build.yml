@@ -18,11 +18,12 @@ jobs:
       with:
         xcode-version: latest
 
-    - name: Prepare Source Code
+    - name: Create Source Files
       run: |
         cat << 'EOF' > VladVideoStarTool.h
         #import <UIKit/UIKit.h>
         #import <Foundation/Foundation.h>
+
         @interface VladVideoStarToolUI : UIView <UIScrollViewDelegate, UIImagePickerControllerDelegate, UINavigationControllerDelegate>
         @property (nonatomic, strong) UIView *panelView;
         @property (nonatomic, strong) UIView *tabBarView;
@@ -31,6 +32,7 @@ jobs:
         @property (nonatomic, strong) UIView *tab1ContentView;
         @property (nonatomic, strong) UIScrollView *tab2ContentView;
         @property (nonatomic, strong) CAGradientLayer *neonBorderLayer;
+
         + (instancetype)sharedInstance;
         - (void)showPanel;
         - (void)hidePanel;
@@ -44,6 +46,7 @@ jobs:
 
         static VladVideoStarToolUI *sharedUI = nil;
 
+        // --- UNLOCK PRO & OPTIMIZATION ---
         %hook VSProManager
         - (BOOL)isProRegistered { return YES; }
         - (BOOL)hasProSubscription { return YES; }
@@ -71,7 +74,9 @@ jobs:
         - (NSInteger)preferredFPS { return 60; }
         %end
 
+        // --- UI PANEL & LOGIC ---
         @implementation VladVideoStarToolUI
+
         + (instancetype)sharedInstance {
             static dispatch_once_t onceToken;
             dispatch_once(&onceToken, ^{
@@ -383,7 +388,7 @@ jobs:
         @end
         EOF
 
-    - name: Compile Dylib via Clang
+    - name: Compile Dylib via Clang on macos-14
       run: |
         mkdir -p build
         clang -dynamiclib -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
