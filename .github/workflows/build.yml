@@ -22,9 +22,7 @@ jobs:
           set -e
           mkdir -p $THEOS/sdks
           git clone --depth 1 https://github.com/theos/sdks.git /tmp/sdks
-          # Lấy SDK 16.5 (đã được cập nhật thay cho 16.4)
           cp -R /tmp/sdks/iPhoneOS16.5.sdk $THEOS/sdks/
-          ls -la $THEOS/sdks/
 
       - name: Create Makefile & Tweak.mm
         run: |
@@ -35,7 +33,7 @@ jobs:
 
           LIBRARY_NAME = VladAuto
           VladAuto_FILES = Tweak.mm
-          VladAuto_FRAMEWORKS = UIKit Foundation AVFoundation Photos PhotosUI QuartzCore CoreMedia AudioToolbox UniformTypeIdentifiers
+          VladAuto_FRAMEWORKS = UIKit Foundation Photos PhotosUI QuartzCore UniformTypeIdentifiers
           
           VladAuto_CFLAGS  = -fobjc-arc -w -stdlib=libc++ -I$(THEOS)/sdks/iPhoneOS16.5.sdk/usr/include/c++/v1
           VladAuto_CCFLAGS = -fobjc-arc -w -std=c++17 -stdlib=libc++ -I$(THEOS)/sdks/iPhoneOS16.5.sdk/usr/include/c++/v1
@@ -47,46 +45,54 @@ jobs:
 
           cat > Tweak.mm << 'TWEAKEOF'
           #import <UIKit/UIKit.h>
-          #import <AVFoundation/AVFoundation.h>
+          #import <Foundation/Foundation.h>
           #import <Photos/Photos.h>
           #import <PhotosUI/PhotosUI.h>
           #import <QuartzCore/QuartzCore.h>
           #import <objc/runtime.h>
           #import <objc/message.h>
-          #import <CoreMedia/CoreMedia.h>
-          #import <AudioToolbox/AudioToolbox.h>
-          #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
-
-          // ═══════════ FORWARD DECLS (THEO ĐÚNG DUMP) ═══════════
-          @interface MeterAndBPMModel : NSObject
-          + (instancetype)sharedInstance;
-          - (NSArray *)beatFrameOffsetsForScene:(NSInteger)scene project:(id)project;
-          - (NSArray *)beatFrameOffsetsForBPM:(double)bpm firstBeatTime:(double)fbt duration:(double)duration startOffset:(double)offset;
-          + (NSDictionary *)bpmAndFirstBeatTimeFromAudioFileAtPath:(NSString *)path;
-          @end
-
-          @interface QRCodeManager : NSObject
-          + (instancetype)sharedInstance;
-          - (void)selectedCode:(id)code withImageData:(NSData *)data;
-          @end
-
-          @interface MultiLayerImageGenerator : NSObject
-          - (void)loadImageAsset:(id)asset;
-          @end
 
           // ═══════════ GLOBALS ═══════════
           static UIImage  *gLastQRImage = nil;
           static NSString *gLastQRCode  = nil;
           static UIWindow *gOverlayWindow = nil;
-          static UIViewController *gCurrentEditor   = nil;
-          static UIViewController *gCurrentSplitVC  = nil;
+          static UIViewController *gCurrentEditor = nil;
           static BOOL gIsAutoFillMode = NO;
           static BOOL gOverlayInitialized = NO;
 
-          static UIImpactFeedbackGenerator *gHapticGen = nil;
-          static AVPlayer *gAudioPlayer = nil;
-          static id gTimeObserver = nil;
-          static NSArray<NSNumber *> *gBeatSeconds = nil;
+          // ═══════════ UI HELPERS ═══════════
+          @interface VladUI : NSObject
+          + (UIColor *)neonGreen;
+          + (UIColor *)neonWhite;
+          + (UIColor *)panelBg;
+          + (UIImage *)icon:(NSString *)name size:(CGFloat)size color:(UIColor *)color;
+          @end
+          @implementation VladUI
+          + (UIColor *)neonGreen { return [UIColor colorWithRed:0.1 green:1.0 blue:0.2 alpha:1.0]; }
+          + (UIColor *)neonWhite { return [UIColor colorWithWhite:1.0 alpha:1.0]; }
+          + (UIColor *)panelBg { return [UIColor colorWithRed:0.03 green:0.03 blue:0.03 alpha:0.98]; }
+          + (UIImage *)icon:(NSString *)name size:(CGFloat)size color:(UIColor *)color {
+              if (@available(iOS 13.0, *)) {
+                  UIImage *img = [UIImage systemImageNamed:name];
+                  UIImageSymbolConfiguration *cfg =
+                      [UIImageSymbolConfiguration configurationWithPointSize:size weight:UIImageSymbolWeightBold];
+                  return [[img imageWithConfiguration:cfg] imageWithTintColor:color
+                                                             renderingMode:UIImageRenderingModeAlwaysOriginal];
+              }
+              return nil;
+          }
+          @end
+
+          // ═══════════ PASSTHROUGH WINDOW ═══════════
+          @interface VSPassthroughWindow : UIWindow
+          @end
+          @implementation VSPassthroughWindow
+          - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+              UIView *hit = [super hitTest:point withEvent:event];
+              if (hit == self || hit == self.rootViewController.view) return nil;
+              return hit;
+          }
+          @end
 
           // ═══════════ FILE HELPERS ═══════════
           static NSString *VladQRDir(void) {
@@ -118,335 +124,89 @@ jobs:
                                               encoding:NSUTF8StringEncoding error:nil];
           }
 
-          // ═══════════ UI HELPERS ═══════════
-          @interface VladUI : NSObject
-          + (UIColor *)neonGreen;
-          + (UIImage *)icon:(NSString *)name size:(CGFloat)size color:(UIColor *)color;
-          @end
-          @implementation VladUI
-          + (UIColor *)neonGreen { return [UIColor colorWithRed:0.1 green:1.0 blue:0.2 alpha:1.0]; }
-          + (UIImage *)icon:(NSString *)name size:(CGFloat)size color:(UIColor *)color {
-              if (@available(iOS 13.0, *)) {
-                  UIImage *img = [UIImage systemImageNamed:name];
-                  UIImageSymbolConfiguration *cfg =
-                      [UIImageSymbolConfiguration configurationWithPointSize:size weight:UIImageSymbolWeightBold];
-                  return [[img imageWithConfiguration:cfg] imageWithTintColor:color
-                                                             renderingMode:UIImageRenderingModeAlwaysOriginal];
-              }
-              return nil;
-          }
-          @end
-
-          @interface VSPassthroughWindow : UIWindow
-          @end
-          @implementation VSPassthroughWindow
-          - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-              UIView *hit = [super hitTest:point withEvent:event];
-              if (hit == self || hit == self.rootViewController.view) return nil;
-              return hit;
-          }
-          @end
-
-          // ═══════════ APPLY IMAGE TO ALL LAYERS ═══════════
+          // ═══════════ APPLY IMAGE LOGIC ═══════════
           static NSInteger ApplyImageToAllLayers(UIViewController *editor, UIImage *image) {
               if (!editor || !image) return -1;
               NSInteger applied = 0;
               @try {
                   id engine = nil;
-                  if ([editor respondsToSelector:NSSelectorFromString(@"engine")])
-                      engine = ((id (*)(id, SEL))objc_msgSend)(editor, NSSelectorFromString(@"engine"));
+                  if ([editor respondsToSelector:@selector(engine)])
+                      engine = ((id (*)(id, SEL))objc_msgSend)(editor, @selector(engine));
                   if (!engine) @try { engine = [editor valueForKey:@"engine"]; } @catch (NSException *e) {}
-                  if (!engine) { NSLog(@"[Vlad] engine nil"); return -1; }
+                  if (!engine) return -1;
 
                   NSArray *layers = nil;
-                  if ([engine respondsToSelector:NSSelectorFromString(@"masterLayers")])
-                      layers = ((id (*)(id, SEL))objc_msgSend)(engine, NSSelectorFromString(@"masterLayers"));
+                  if ([engine respondsToSelector:@selector(masterLayers)])
+                      layers = ((id (*)(id, SEL))objc_msgSend)(engine, @selector(masterLayers));
                   if (!layers) @try { layers = [engine valueForKey:@"masterLayers"]; } @catch (NSException *e) {}
-                  if (!layers) { NSLog(@"[Vlad] masterLayers nil"); return -1; }
+                  if (!layers) return -1;
 
                   for (id layer in layers) {
                       @try {
                           id imageGen = nil;
-                          if ([layer respondsToSelector:NSSelectorFromString(@"imageGenerator")])
-                              imageGen = ((id (*)(id, SEL))objc_msgSend)(layer, NSSelectorFromString(@"imageGenerator"));
+                          if ([layer respondsToSelector:@selector(imageGenerator)])
+                              imageGen = ((id (*)(id, SEL))objc_msgSend)(layer, @selector(imageGenerator));
                           if (!imageGen) @try { imageGen = [layer valueForKey:@"imageGenerator"]; } @catch (NSException *e) {}
                           if (!imageGen) continue;
 
                           unsigned long long colorMode = 0;
-                          if ([layer respondsToSelector:NSSelectorFromString(@"colorEffectMode")])
-                              colorMode = ((unsigned long long (*)(id, SEL))objc_msgSend)(layer,
-                                          NSSelectorFromString(@"colorEffectMode"));
+                          if ([layer respondsToSelector:@selector(colorEffectMode)])
+                              colorMode = ((unsigned long long (*)(id, SEL))objc_msgSend)(layer, @selector(colorEffectMode));
                           if (colorMode > 0) continue;
 
                           [imageGen setValue:image forKey:@"layerImage"];
-                          if ([imageGen respondsToSelector:NSSelectorFromString(@"newPhotoNotification:")])
-                              ((void (*)(id, SEL, id))objc_msgSend)(imageGen,
-                                  NSSelectorFromString(@"newPhotoNotification:"), nil);
+                          if ([imageGen respondsToSelector:@selector(newPhotoNotification:)])
+                              ((void (*)(id, SEL, id))objc_msgSend)(imageGen, @selector(newPhotoNotification:), nil);
                           applied++;
                       } @catch (NSException *e) {}
                   }
-                  NSLog(@"[Vlad] Đã áp dụng %ld layer", (long)applied);
 
-                  if ([editor respondsToSelector:NSSelectorFromString(@"updatePreview")]) {
-                      ((void (*)(id, SEL))objc_msgSend)(editor, NSSelectorFromString(@"updatePreview"));
-                  } else if ([editor respondsToSelector:NSSelectorFromString(@"updateDisplayAtFrame:")]) {
+                  if ([editor respondsToSelector:@selector(updatePreview)]) {
+                      ((void (*)(id, SEL))objc_msgSend)(editor, @selector(updatePreview));
+                  } else if ([editor respondsToSelector:@selector(updateDisplayAtFrame:)]) {
                       unsigned long long f = 0;
-                      ((void (*)(id, SEL, unsigned long long))objc_msgSend)(editor,
-                          NSSelectorFromString(@"updateDisplayAtFrame:"), f);
+                      ((void (*)(id, SEL, unsigned long long))objc_msgSend)(editor, @selector(updateDisplayAtFrame:), f);
                   }
-              } @catch (NSException *e) { NSLog(@"[Vlad] Apply error: %@", e.reason); }
+              } @catch (NSException *e) { NSLog(@"[Vlad] Lỗi Apply: %@", e.reason); }
               return applied;
           }
 
-          // ═══════════ BEAT DETECTOR ═══════════
-          @interface VladBeatDetector : NSObject
-          + (void)detectFromProject:(id)project
-                              scene:(NSInteger)sceneIndex
-                         completion:(void(^)(double bpm, NSArray<NSValue *> *times, NSError *error))completion;
-          @end
-
-          @implementation VladBeatDetector
-          + (NSArray<NSValue *> *)convertFramesToTimes:(NSArray *)frames frameRate:(double)frameRate {
-              if (!frames || frames.count == 0) return nil;
-              NSMutableArray *times = [NSMutableArray array];
-              for (id val in frames) {
-                  double f = 0;
-                  if ([val isKindOfClass:[NSNumber class]]) f = [val doubleValue];
-                  else @try { f = [[val valueForKey:@"doubleValue"] doubleValue]; } @catch (NSException *e) {}
-                  double sec = f / frameRate;
-                  if (sec > 0.05) {
-                      CMTime t = CMTimeMakeWithSeconds(sec, 600);
-                      [times addObject:[NSValue valueWithBytes:&t objCType:@encode(CMTime)]];
+          // ═══════════ VC HIERARCHY WALK ═══════════
+          static UIViewController *CurrentKeyVC(void) {
+              UIWindow *kw = nil;
+              if (@available(iOS 13.0, *)) {
+                  for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+                      if (s.activationState != UISceneActivationStateForegroundActive) continue;
+                      if ([s isKindOfClass:[UIWindowScene class]]) {
+                          for (UIWindow *w in ((UIWindowScene *)s).windows) {
+                              if (!w.hidden && w != gOverlayWindow && w.windowLevel == UIWindowLevelNormal) { kw = w; break; }
+                          }
+                      }
+                      if (kw) break;
                   }
               }
-              return times.count > 0 ? times : nil;
+              if (!kw) kw = [UIApplication sharedApplication].keyWindow;
+              return kw.rootViewController;
           }
 
-          + (void)detectFromProject:(id)project scene:(NSInteger)sceneIndex
-                         completion:(void(^)(double, NSArray<NSValue *> *, NSError *))completion {
-              dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                  NSError *err = nil;
-                  NSArray<NSValue *> *times = nil;
-                  double bpm = 0;
-                  @try {
-                      double frameRate = 30.0;
-                      @try { frameRate = [[project valueForKey:@"frameRate"] doubleValue]; } @catch (NSException *e) {}
-                      if (frameRate <= 0) frameRate = 30.0;
-
-                      double songBPM = 0, songFBT = 0, songDuration = 0;
-                      @try {
-                          songBPM      = [[project valueForKey:@"songBPM"] doubleValue];
-                          songFBT      = [[project valueForKey:@"songFirstBeatTime"] doubleValue];
-                          songDuration = [[project valueForKey:@"songDuration"] doubleValue];
-                      } @catch (NSException *e) {}
-
-                      Class MeterClass = NSClassFromString(@"MeterAndBPMModel");
-                      id meter = nil;
-                      if (MeterClass && [MeterClass respondsToSelector:@selector(sharedInstance)])
-                          meter = ((id (*)(id, SEL))objc_msgSend)(MeterClass, @selector(sharedInstance));
-
-                      if (songBPM > 0 && songFBT >= 0 && songDuration > 0 && meter) {
-                          SEL sel = NSSelectorFromString(@"beatFrameOffsetsForBPM:firstBeatTime:duration:startOffset:");
-                          if ([meter respondsToSelector:sel]) {
-                              NSArray *fr = ((id (*)(id, SEL, double, double, double, double))objc_msgSend)(
-                                  meter, sel, songBPM, songFBT, songDuration, 0);
-                              times = [self convertFramesToTimes:fr frameRate:frameRate];
-                              if (times) bpm = songBPM;
-                          }
-                      }
-
-                      if (!times && meter) {
-                          SEL sel = NSSelectorFromString(@"beatFrameOffsetsForScene:project:");
-                          if ([meter respondsToSelector:sel]) {
-                              NSArray *fr = ((id (*)(id, SEL, NSInteger, id))objc_msgSend)(meter, sel, sceneIndex, project);
-                              times = [self convertFramesToTimes:fr frameRate:frameRate];
-                              if (times) @try { bpm = [[project valueForKey:@"songBPM"] doubleValue]; } @catch (NSException *e) {}
-                          }
-                      }
-
-                      if (!times && meter) {
-                          NSURL *audioURL = nil;
-                          @try {
-                              id fm = [project valueForKey:@"fileManager"];
-                              if (fm && [fm respondsToSelector:@selector(trimmedSongURL)])
-                                  audioURL = ((id (*)(id, SEL))objc_msgSend)(fm, @selector(trimmedSongURL));
-                              if (!audioURL && fm && [fm respondsToSelector:@selector(songURL)])
-                                  audioURL = ((id (*)(id, SEL))objc_msgSend)(fm, @selector(songURL));
-                          } @catch (NSException *e) {}
-
-                          SEL selA = NSSelectorFromString(@"bpmAndFirstBeatTimeFromAudioFileAtPath:");
-                          NSDictionary *res = nil;
-                          if (audioURL) {
-                              if (MeterClass && [MeterClass respondsToSelector:selA])
-                                  res = ((id (*)(id, SEL, NSString *))objc_msgSend)(MeterClass, selA, audioURL.path);
-                              else if ([meter respondsToSelector:selA])
-                                  res = ((id (*)(id, SEL, NSString *))objc_msgSend)(meter, selA, audioURL.path);
-                          }
-                          if ([res isKindOfClass:[NSDictionary class]]) {
-                              double dBPM = [[res valueForKey:@"bpm"] doubleValue];
-                              double dFBT = [[res valueForKey:@"firstBeatTime"] doubleValue];
-                              if (dBPM > 0) {
-                                  SEL selF = NSSelectorFromString(@"beatFrameOffsetsForBPM:firstBeatTime:duration:startOffset:");
-                                  if ([meter respondsToSelector:selF]) {
-                                      NSArray *fr = ((id (*)(id, SEL, double, double, double, double))objc_msgSend)(
-                                          meter, selF, dBPM, dFBT, songDuration, 0);
-                                      times = [self convertFramesToTimes:fr frameRate:frameRate];
-                                      if (times) bpm = dBPM;
-                                  }
-                              }
-                          }
-                      }
-
-                      if (!times) err = [NSError errorWithDomain:@"Vlad" code:2
-                          userInfo:@{NSLocalizedDescriptionKey:
-                              @"Không bóc được beat từ project này.\n\n"
-                              @"Nguyên nhân thường gặp:\n"
-                              @"• Project chưa import nhạc (qua Song Picker)\n"
-                              @"• Nhạc quá ngắn (< 5 giây)\n"
-                              @"• Nhạc silent / không có nhịp rõ ràng"}];
-                  } @catch (NSException *e) {
-                      err = [NSError errorWithDomain:@"Vlad" code:99
-                          userInfo:@{NSLocalizedDescriptionKey: e.reason ?: @"Lỗi"}];
+          static UIViewController *FindEditorVC(void) {
+              if (gCurrentEditor && gCurrentEditor.view.window) return gCurrentEditor;
+              NSMutableArray *stack = [NSMutableArray arrayWithObject:CurrentKeyVC()];
+              while (stack.count > 0) {
+                  UIViewController *vc = [stack lastObject];
+                  [stack removeLastObject];
+                  if (!vc) continue;
+                  if ([NSStringFromClass([vc class]) containsString:@"MultiLayerWizEffectVC"]) return vc;
+                  if ([vc isKindOfClass:[UINavigationController class]]) {
+                      [stack addObjectsFromArray:((UINavigationController *)vc).viewControllers];
+                  } else if ([vc isKindOfClass:[UITabBarController class]]) {
+                      [stack addObjectsFromArray:((UITabBarController *)vc).viewControllers];
+                  } else {
+                      [stack addObjectsFromArray:vc.childViewControllers];
                   }
-                  dispatch_async(dispatch_get_main_queue(), ^{ completion(bpm, times, err); });
-              });
-          }
-          @end
-
-          // ═══════════ SPLIT SCENE ═══════════
-          static void SplitSceneWithTimes(UIViewController *splitVC,
-                                          NSArray<NSValue *> *times,
-                                          void(^completion)(NSError *error, NSInteger splitCount)) {
-              if (!splitVC || times.count == 0) {
-                  if (completion) completion([NSError errorWithDomain:@"Vlad" code:1
-                      userInfo:@{NSLocalizedDescriptionKey:@"Không có mốc thời gian"}], 0);
-                  return;
+                  if (vc.presentedViewController) [stack addObject:vc.presentedViewController];
               }
-              @try {
-                  id project = nil;
-                  if ([splitVC respondsToSelector:@selector(project)])
-                      project = ((id (*)(id, SEL))objc_msgSend)(splitVC, @selector(project));
-                  if (!project) {
-                      Class PM = NSClassFromString(@"Video_Star.ProjectManager")
-                              ?: NSClassFromString(@"_TtC10Video_Star14ProjectManager")
-                              ?: NSClassFromString(@"ProjectManager");
-                      if (PM && [PM respondsToSelector:@selector(sharedInstance)]) {
-                          id pm = ((id (*)(id, SEL))objc_msgSend)(PM, @selector(sharedInstance));
-                          if ([pm respondsToSelector:@selector(activeEditProject)])
-                              project = ((id (*)(id, SEL))objc_msgSend)(pm, @selector(activeEditProject));
-                      }
-                  }
-                  if (!project) {
-                      if (completion) completion([NSError errorWithDomain:@"Vlad" code:2
-                          userInfo:@{NSLocalizedDescriptionKey:@"Không tìm được project"}], 0);
-                      return;
-                  }
-
-                  unsigned long long sceneIndex = 0;
-                  if ([splitVC respondsToSelector:@selector(sceneIndex)])
-                      sceneIndex = ((unsigned long long (*)(id, SEL))objc_msgSend)(splitVC, @selector(sceneIndex));
-
-                  unsigned long long startCount = 0;
-                  if ([project respondsToSelector:@selector(sceneCount)])
-                      startCount = ((unsigned long long (*)(id, SEL))objc_msgSend)(project, @selector(sceneCount));
-
-                  SEL sel = NSSelectorFromString(@"multiSplitSceneAtIndex:times:progressView:completion:");
-                  if (![project respondsToSelector:sel]) {
-                      if (completion) completion([NSError errorWithDomain:@"Vlad" code:3
-                          userInfo:@{NSLocalizedDescriptionKey:@"Project không có multiSplit API"}], 0);
-                      return;
-                  }
-
-                  NSMethodSignature *sig = [project methodSignatureForSelector:sel];
-                  NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-                  [inv setTarget:project];
-                  [inv setSelector:sel];
-                  [inv setArgument:&sceneIndex atIndex:2];
-
-                  NSArray *t = times;
-                  [inv setArgument:&t atIndex:3];
-                  id nilProgress = nil;
-                  [inv setArgument:&nilProgress atIndex:4];
-
-                  __block BOOL blockFired = NO;
-                  void (^noop)(void) = ^{
-                      blockFired = YES;
-                      NSLog(@"[Vlad] multiSplit completion fired");
-                  };
-                  id cbHeap = [noop copy];
-                  [inv setArgument:&cbHeap atIndex:5];
-
-                  NSLog(@"[Vlad] Invoking multiSplit at scene %llu with %lu times",
-                        sceneIndex, (unsigned long)times.count);
-                  [inv invoke];
-
-                  __block NSInteger polls = 0;
-                  __block void (^checkSuccess)(void);
-                  checkSuccess = ^{
-                      if (blockFired) {
-                          if (completion) completion(nil, (NSInteger)times.count);
-                          return;
-                      }
-                      polls++;
-                      if (polls > 200) {
-                          if (completion) completion([NSError errorWithDomain:@"Vlad" code:99
-                              userInfo:@{NSLocalizedDescriptionKey:
-                                  @"Timeout sau 60s.\nCó thể đã xong - hãy kiểm tra app."}],
-                                  (NSInteger)times.count);
-                          return;
-                      }
-                      unsigned long long nowCount = 0;
-                      if ([project respondsToSelector:@selector(sceneCount)])
-                          nowCount = ((unsigned long long (*)(id, SEL))objc_msgSend)(project, @selector(sceneCount));
-                      if (nowCount > startCount) {
-                          if (completion) completion(nil, (NSInteger)times.count);
-                          return;
-                      }
-                      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
-                                     dispatch_get_main_queue(), checkSuccess);
-                  };
-                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
-                                 dispatch_get_main_queue(), checkSuccess);
-              } @catch (NSException *e) {
-                  if (completion) completion([NSError errorWithDomain:@"Vlad" code:99
-                      userInfo:@{NSLocalizedDescriptionKey: e.reason ?: @"Lỗi"}], 0);
-              }
-          }
-
-          // ═══════════ HAPTIC SYNC ═══════════
-          static void StopHapticSync(void) {
-              if (gAudioPlayer && gTimeObserver) @try { [gAudioPlayer removeTimeObserver:gTimeObserver]; } @catch (NSException *e) {}
-              gTimeObserver = nil;
-              [gAudioPlayer pause];
-              gAudioPlayer = nil;
-              gBeatSeconds = nil;
-              gHapticGen = nil;
-          }
-          static void StartHapticSync(NSArray<NSNumber *> *beats, NSURL *audioURL) {
-              StopHapticSync();
-              if (!audioURL || beats.count == 0) return;
-              gHapticGen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
-              [gHapticGen prepare];
-              gAudioPlayer = [[AVPlayer alloc] initWithURL:audioURL];
-              gBeatSeconds = beats;
-              __block NSInteger lastIdx = -1;
-              gTimeObserver = [gAudioPlayer addPeriodicTimeObserverForInterval:CMTimeMake(1, 30)
-                                                                         queue:dispatch_get_main_queue()
-                                                                    usingBlock:^(CMTime time) {
-                  double t = CMTimeGetSeconds(time);
-                  NSArray<NSNumber *> *b = gBeatSeconds;
-                  if (!b) return;
-                  for (NSInteger i = 0; i < (NSInteger)b.count; i++) {
-                      double bt = [b[i] doubleValue];
-                      if (bt > t - 0.05 && bt <= t + 0.05 && i != lastIdx) {
-                          lastIdx = i;
-                          [gHapticGen impactOccurred];
-                          [gHapticGen prepare];
-                          break;
-                      }
-                  }
-              }];
-              [gAudioPlayer play];
+              return nil;
           }
 
           // ═══════════ QR PREVIEW VC ═══════════
@@ -561,232 +321,95 @@ jobs:
                   initWithActivityItems:@[self.qrImage] applicationActivities:nil];
               if (av.popoverPresentationController) {
                   av.popoverPresentationController.sourceView = self.view;
-                  av.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width/2,
-                                                                           self.view.bounds.size.height/2, 1, 1);
+                  av.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width/2, self.view.bounds.size.height/2, 1, 1);
               }
               [self presentViewController:av animated:YES completion:nil];
           }
           - (void)closeTapped { [self dismissViewControllerAnimated:YES completion:nil]; }
           @end
 
-          // ═══════════ VC HIERARCHY WALK ═══════════
-          static UIViewController *FindVCInHierarchy(UIViewController *root, BOOL(^matcher)(NSString *cls)) {
-              if (!root || !matcher) return nil;
-              NSString *cls = NSStringFromClass([root class]);
-              if (matcher(cls)) return root;
-
-              if ([root isKindOfClass:[UINavigationController class]]) {
-                  for (UIViewController *c in ((UINavigationController *)root).viewControllers) {
-                      UIViewController *f = FindVCInHierarchy(c, matcher);
-                      if (f) return f;
-                  }
-              }
-              if ([root isKindOfClass:[UITabBarController class]]) {
-                  for (UIViewController *c in ((UITabBarController *)root).viewControllers) {
-                      UIViewController *f = FindVCInHierarchy(c, matcher);
-                      if (f) return f;
-                  }
-              }
-              for (UIViewController *c in root.childViewControllers) {
-                  UIViewController *f = FindVCInHierarchy(c, matcher);
-                  if (f) return f;
-              }
-              if (root.presentedViewController)
-                  return FindVCInHierarchy(root.presentedViewController, matcher);
-              return nil;
-          }
-
-          static UIViewController *CurrentKeyVC(void) {
-              UIWindow *kw = nil;
-              if (@available(iOS 13.0, *)) {
-                  for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-                      if (s.activationState != UISceneActivationStateForegroundActive) continue;
-                      if ([s isKindOfClass:[UIWindowScene class]]) {
-                          for (UIWindow *w in ((UIWindowScene *)s).windows) {
-                              if (!w.hidden && w != gOverlayWindow &&
-                                  w.windowLevel == UIWindowLevelNormal) { kw = w; break; }
-                          }
-                      }
-                      if (kw) break;
-                  }
-              }
-              if (!kw) kw = [UIApplication sharedApplication].keyWindow;
-              return kw.rootViewController;
-          }
-
-          static UIViewController *FindEditor(void) {
-              if (gCurrentEditor && gCurrentEditor.view.window) return gCurrentEditor;
-              return FindVCInHierarchy(CurrentKeyVC(), ^BOOL(NSString *c) {
-                  return [c containsString:@"MultiLayerWizEffectVC"];
-              });
-          }
-
-          static UIViewController *FindSplitVC(void) {
-              if (gCurrentSplitVC && gCurrentSplitVC.view.window) return gCurrentSplitVC;
-              return FindVCInHierarchy(CurrentKeyVC(), ^BOOL(NSString *c) {
-                  return [c containsString:@"VideoReviewEditVC"];
-              });
-          }
-
-          // ═══════════ MENU VIEW ═══════════
+          // ═══════════ MENU VIEW (TỐI GIẢN 2 NÚT) ═══════════
           @interface VladMenuView : UIView
           @property (nonatomic, strong) UIView *panel;
-          @property (nonatomic, strong) NSMutableArray<UIButton *> *tabButtons;
-          @property (nonatomic, strong) UIView *contentView;
           @end
 
           @implementation VladMenuView
           - (instancetype)initWithFrame:(CGRect)frame {
-              if (self = [super initWithFrame:frame]) [self setupUI];
-              return self;
-          }
-          - (void)setupUI {
-              self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.7];
-              [self addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(closeTapped)]];
+              if (self = [super initWithFrame:frame]) {
+                  self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.75];
+                  [self addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(closeTapped)]];
 
-              CGFloat sw = UIScreen.mainScreen.bounds.size.width;
-              CGFloat sh = UIScreen.mainScreen.bounds.size.height;
-              CGFloat pw = MIN(360, sw - 40);
-              CGFloat ph = sh < 650 ? 460 : 520;
+                  CGFloat sw = UIScreen.mainScreen.bounds.size.width;
+                  CGFloat pw = MIN(300, sw - 40);
+                  CGFloat ph = 280; // Chiều cao vừa đủ cho 2 nút
 
-              self.panel = [[UIView alloc] initWithFrame:CGRectMake(0, 0, pw, ph)];
-              self.panel.center = self.center;
-              self.panel.backgroundColor = [UIColor colorWithRed:0.05 green:0.05 blue:0.07 alpha:0.98];
-              self.panel.layer.cornerRadius = 18;
-              self.panel.layer.borderWidth = 2.0;
-              self.panel.layer.borderColor = [VladUI neonGreen].CGColor;
-              self.panel.layer.shadowColor = [VladUI neonGreen].CGColor;
-              self.panel.layer.shadowRadius = 14; self.panel.layer.shadowOpacity = 0.6;
-              self.panel.layer.shadowOffset = CGSizeZero;
-              [self.panel addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:nil action:nil]];
-              [self addSubview:self.panel];
+                  self.panel = [[UIView alloc] initWithFrame:CGRectMake(0, 0, pw, ph)];
+                  self.panel.center = self.center;
+                  self.panel.backgroundColor = [VladUI panelBg];
+                  self.panel.layer.cornerRadius = 16;
+                  self.panel.layer.borderWidth = 1.5;
+                  self.panel.layer.borderColor = [VladUI neonGreen].CGColor;
+                  self.panel.layer.shadowColor = [VladUI neonGreen].CGColor;
+                  self.panel.layer.shadowRadius = 12; self.panel.layer.shadowOpacity = 0.5;
+                  self.panel.layer.shadowOffset = CGSizeZero;
+                  [self.panel addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:nil action:nil]];
+                  [self addSubview:self.panel];
 
-              UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(20, 22, pw-40, 30)];
-              title.text = @"Vlad Tool Video Star";
-              title.textColor = [UIColor whiteColor];
-              title.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:22];
-              title.textAlignment = NSTextAlignmentCenter;
-              [self.panel addSubview:title];
+                  // Title & Subtitle
+                  UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(15, 25, pw-30, 25)];
+                  title.text = @"Vlad Tool Video Star";
+                  title.textColor = [VladUI neonWhite];
+                  title.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:18];
+                  title.textAlignment = NSTextAlignmentCenter;
+                  [self.panel addSubview:title];
 
-              UILabel *subtitle = [[UILabel alloc] initWithFrame:CGRectMake(20, 52, pw-40, 20)];
-              subtitle.text = @"Developer Vlad · v2.0";
-              subtitle.textColor = [VladUI neonGreen];
-              subtitle.font = [UIFont systemFontOfSize:14];
-              subtitle.textAlignment = NSTextAlignmentCenter;
-              [self.panel addSubview:subtitle];
+                  UILabel *subtitle = [[UILabel alloc] initWithFrame:CGRectMake(15, 52, pw-30, 15)];
+                  subtitle.text = @"Owner & Developer - Vlad";
+                  subtitle.textColor = [VladUI neonGreen];
+                  subtitle.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
+                  subtitle.textAlignment = NSTextAlignmentCenter;
+                  [self.panel addSubview:subtitle];
 
-              UIButton *close = [UIButton buttonWithType:UIButtonTypeCustom];
-              close.frame = CGRectMake(pw-40, 18, 30, 30);
-              [close setImage:[VladUI icon:@"xmark.circle.fill" size:22 color:[UIColor grayColor]]
-                     forState:UIControlStateNormal];
-              [close addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
-              [self.panel addSubview:close];
+                  // Close button (X)
+                  UIButton *close = [UIButton buttonWithType:UIButtonTypeCustom];
+                  close.frame = CGRectMake(pw-35, 15, 30, 30);
+                  [close setImage:[VladUI icon:@"xmark.circle.fill" size:20 color:[UIColor darkGrayColor]]
+                         forState:UIControlStateNormal];
+                  [close addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
+                  [self.panel addSubview:close];
 
-              UIView *tabBar = [[UIView alloc] initWithFrame:CGRectMake(20, 85, pw-40, 40)];
-              tabBar.backgroundColor = [UIColor colorWithWhite:1 alpha:0.05];
-              tabBar.layer.cornerRadius = 8;
-              [self.panel addSubview:tabBar];
-
-              NSArray *titles = @[@"TRANG CHỦ", @"CHỨC NĂNG", @"TÁC GIẢ"];
-              self.tabButtons = [NSMutableArray array];
-              CGFloat tw = (pw-40)/3.0;
-              for (int i=0; i<3; i++) {
-                  UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
-                  btn.frame = CGRectMake(i*tw, 0, tw, 40);
-                  [btn setTitle:titles[i] forState:UIControlStateNormal];
-                  [btn setTitleColor:[UIColor grayColor] forState:UIControlStateNormal];
-                  [btn setTitleColor:[UIColor blackColor] forState:UIControlStateSelected];
-                  btn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
-                  btn.tag = i; btn.layer.cornerRadius = 8;
-                  [btn addTarget:self action:@selector(tabTapped:) forControlEvents:UIControlEventTouchUpInside];
-                  [tabBar addSubview:btn];
-                  [self.tabButtons addObject:btn];
-              }
-
-              self.contentView = [[UIView alloc] initWithFrame:CGRectMake(20, 140, pw-40, ph-160)];
-              [self.panel addSubview:self.contentView];
-              [self tabTapped:self.tabButtons[0]];
-          }
-          - (void)tabTapped:(UIButton *)sender {
-              for (UIButton *b in self.tabButtons) {
-                  b.selected = NO;
-                  b.backgroundColor = [UIColor clearColor];
-                  [b setTitleColor:[UIColor grayColor] forState:UIControlStateNormal];
-              }
-              sender.selected = YES;
-              sender.backgroundColor = [VladUI neonGreen];
-              [sender setTitleColor:[UIColor blackColor] forState:UIControlStateSelected];
-              [self renderTab:sender.tag];
-          }
-          - (void)renderTab:(NSInteger)index {
-              for (UIView *v in self.contentView.subviews) [v removeFromSuperview];
-
-              if (index == 0) {
-                  UIViewController *ed = FindEditor();
-                  UIViewController *sp = FindSplitVC();
-                  NSString *status = [NSString stringWithFormat:
-                      @"TRẠNG THÁI TOOL\n\n"
-                      @"Editor (Nhập Ảnh): %@\n"
-                      @"Split VC (Chia Beat): %@\n\n"
-                      @"Chạm tab CHỨC NĂNG để dùng.",
-                      ed ? @"✓ Đã phát hiện" : @"✗ Chưa mở",
-                      sp ? @"✓ Đã phát hiện" : @"✗ Chưa mở"];
-
-                  UILabel *lbl = [[UILabel alloc] initWithFrame:self.contentView.bounds];
-                  lbl.numberOfLines = 0;
-                  lbl.textColor = [UIColor lightGrayColor];
-                  lbl.font = [UIFont systemFontOfSize:14];
-                  lbl.textAlignment = NSTextAlignmentCenter;
-                  lbl.text = status;
-                  [self.contentView addSubview:lbl];
-              } else if (index == 1) {
-                  NSArray *titles = @[@"Xem Code Gần Nhất", @"Tự Động Chia Beat", @"Tự Động Nhập Ảnh"];
-                  NSArray *descs = @[@"Xem / lưu / chia sẻ QR vừa quét",
-                                     @"Chia phân cảnh khớp nhịp nhạc",
-                                     @"Áp ảnh vào toàn bộ layer"];
-                  NSArray *icons = @[@"qrcode.viewfinder", @"waveform.path.ecg", @"photo.on.rectangle.angled"];
-
-                  CGFloat bh = 75, gap = 15;
-                  for (int i=0; i<3; i++) {
+                  // 2 NÚT CHỨC NĂNG
+                  NSArray *titles = @[@"Xem Code Gần Nhất", @"Tự Động Nhập Ảnh"];
+                  NSArray *icons = @[@"qrcode.viewfinder", @"photo.on.rectangle.angled"];
+                  
+                  CGFloat bh = 65, gap = 15, startY = 95;
+                  for (int i=0; i<2; i++) {
                       UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
-                      btn.frame = CGRectMake(0, i*(bh+gap), self.contentView.bounds.size.width, bh);
-                      btn.backgroundColor = [UIColor colorWithRed:0.1 green:0.1 blue:0.12 alpha:0.9];
-                      btn.layer.cornerRadius = 12;
+                      btn.frame = CGRectMake(20, startY + i*(bh+gap), pw-40, bh);
+                      btn.backgroundColor = [UIColor colorWithWhite:0.1 alpha:1.0];
+                      btn.layer.cornerRadius = 10;
                       btn.layer.borderWidth = 1;
-                      btn.layer.borderColor = [[VladUI neonGreen] colorWithAlphaComponent:0.3].CGColor;
+                      btn.layer.borderColor = [[VladUI neonWhite] colorWithAlphaComponent:0.1].CGColor;
                       btn.tag = i;
 
-                      UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake(15, 25, 24, 24)];
-                      iv.image = [VladUI icon:icons[i] size:24 color:[VladUI neonGreen]];
+                      UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake(15, 20, 24, 24)];
+                      iv.image = [VladUI icon:icons[i] size:24 color:[VladUI neonWhite]];
                       [btn addSubview:iv];
 
-                      UILabel *tl = [[UILabel alloc] initWithFrame:CGRectMake(55, 18, btn.frame.size.width-70, 22)];
+                      UILabel *tl = [[UILabel alloc] initWithFrame:CGRectMake(55, 20, btn.frame.size.width-70, 24)];
                       tl.text = titles[i];
-                      tl.textColor = [UIColor whiteColor];
-                      tl.font = [UIFont boldSystemFontOfSize:14];
+                      tl.textColor = [VladUI neonWhite];
+                      tl.font = [UIFont boldSystemFontOfSize:15];
                       tl.userInteractionEnabled = NO;
                       [btn addSubview:tl];
 
-                      UILabel *dl = [[UILabel alloc] initWithFrame:CGRectMake(55, 38, btn.frame.size.width-70, 18)];
-                      dl.text = descs[i];
-                      dl.textColor = [UIColor grayColor];
-                      dl.font = [UIFont systemFontOfSize:11];
-                      dl.userInteractionEnabled = NO;
-                      [btn addSubview:dl];
-
                       [btn addTarget:self action:@selector(funcTapped:) forControlEvents:UIControlEventTouchUpInside];
-                      [self.contentView addSubview:btn];
+                      [self.panel addSubview:btn];
                   }
-              } else {
-                  UILabel *lbl = [[UILabel alloc] initWithFrame:self.contentView.bounds];
-                  lbl.numberOfLines = 0;
-                  lbl.textColor = [UIColor grayColor];
-                  lbl.textAlignment = NSTextAlignmentCenter;
-                  lbl.font = [UIFont systemFontOfSize:14];
-                  lbl.text = @"Chủ sở hữu: Vlad\nNgười phát triển: Vlad\n\nVui lòng không leak tool dưới mọi hình thức.\n\nPhiên bản: 2.0";
-                  [self.contentView addSubview:lbl];
               }
+              return self;
           }
+
           - (UIViewController *)presentingVC {
               UIWindow *kw = nil;
               if (@available(iOS 13.0, *)) {
@@ -806,6 +429,7 @@ jobs:
               while (vc.presentedViewController) vc = vc.presentedViewController;
               return vc;
           }
+
           - (void)showAlert:(NSString *)title msg:(NSString *)msg {
               dispatch_async(dispatch_get_main_queue(), ^{
                   UIAlertController *al = [UIAlertController alertControllerWithTitle:title message:msg
@@ -815,13 +439,14 @@ jobs:
                   if (p) [p presentViewController:al animated:YES completion:nil];
               });
           }
+
           - (void)funcTapped:(UIButton *)sender {
               if (sender.tag == 0) {
+                  // CHỨC NĂNG 1: XEM CODE
                   if (!gLastQRImage) gLastQRImage = VladLoadQRImage();
                   if (!gLastQRCode) gLastQRCode = VladLoadQRCode();
                   if (!gLastQRImage) {
-                      [self showAlert:@"Chưa Có Code"
-                                  msg:@"Chưa có ảnh QR nào được lưu.\nHãy quét QR trong app trước."];
+                      [self showAlert:@"Chưa Có Code" msg:@"Chưa có ảnh QR nào được lưu.\nHãy quét QR trong app trước."];
                       return;
                   }
                   dispatch_async(dispatch_get_main_queue(), ^{
@@ -829,81 +454,11 @@ jobs:
                       UIViewController *p = [self presentingVC];
                       if (p) [p presentViewController:vc animated:YES completion:nil];
                   });
-              }
-              else if (sender.tag == 1) {
-                  UIViewController *splitVC = FindSplitVC();
-                  if (!splitVC || !splitVC.view.window) {
-                      [self showAlert:@"Chưa Mở Trình Chia Cảnh"
-                                  msg:@"Hãy vào màn hình VideoReviewEditVC trước."];
-                      return;
-                  }
-                  id project = nil;
-                  if ([splitVC respondsToSelector:@selector(project)])
-                      project = ((id (*)(id, SEL))objc_msgSend)(splitVC, @selector(project));
-                  if (!project) { [self showAlert:@"Lỗi" msg:@"Không lấy được project."]; return; }
-
-                  unsigned long long sceneIndex = 0;
-                  if ([splitVC respondsToSelector:@selector(sceneIndex)])
-                      sceneIndex = ((unsigned long long (*)(id, SEL))objc_msgSend)(splitVC, @selector(sceneIndex));
-
-                  [self showAlert:@"Đang Phân Tích" msg:@"Đang bắt nhịp..."];
-                  __weak typeof(self) weakSelf = self;
-                  [VladBeatDetector detectFromProject:project scene:(NSInteger)sceneIndex
-                                           completion:^(double bpm, NSArray<NSValue *> *times, NSError *error) {
-                      __strong typeof(weakSelf) self = weakSelf;
-                      if (!self) return;
-                      if (error) { [self showAlert:@"Lỗi" msg:error.localizedDescription]; return; }
-
-                      NSArray<NSValue *> *toUse = times;
-                      if (times.count > 60) {
-                          NSInteger step = (times.count + 59) / 60;
-                          NSMutableArray *sampled = [NSMutableArray array];
-                          for (NSInteger i = 0; i < (NSInteger)times.count; i += step)
-                              [sampled addObject:times[i]];
-                          toUse = sampled;
-                          NSLog(@"[Vlad] Cap %lu -> %lu splits (step %ld)",
-                                (unsigned long)times.count, (unsigned long)toUse.count, (long)step);
-                      }
-
-                      NSString *msg = [NSString stringWithFormat:
-                          @"BPM: %.1f\nTổng beat gốc: %lu\nSẽ chia thành: %lu phân cảnh\n\nTiếp tục?",
-                          bpm, (unsigned long)times.count, (unsigned long)toUse.count];
-                      UIAlertController *al = [UIAlertController alertControllerWithTitle:@"Chia Beat"
-                                                                              message:msg
-                                                                       preferredStyle:UIAlertControllerStyleAlert];
-                      [al addAction:[UIAlertAction actionWithTitle:@"Huỷ" style:UIAlertActionStyleCancel handler:nil]];
-                      [al addAction:[UIAlertAction actionWithTitle:@"CHIA" style:UIAlertActionStyleDestructive
-                                                          handler:^(UIAlertAction *a) {
-                          [self showAlert:@"Đang Chia" msg:@"Vui lòng đợi..."];
-                          SplitSceneWithTimes(splitVC, toUse, ^(NSError *e, NSInteger cnt) {
-                              if (e) [self showAlert:@"Kết Quả" msg:e.localizedDescription];
-                              else [self showAlert:@"Hoàn Tất"
-                                              msg:[NSString stringWithFormat:@"Đã chia %ld phân cảnh!", (long)cnt]];
-                          });
-                          NSMutableArray<NSNumber *> *secs = [NSMutableArray array];
-                          for (NSValue *v in toUse) {
-                              CMTime t; [v getValue:&t];
-                              [secs addObject:@(CMTimeGetSeconds(t))];
-                          }
-                          NSURL *audioURL = nil;
-                          @try {
-                              id fm = [project valueForKey:@"fileManager"];
-                              if (fm && [fm respondsToSelector:@selector(trimmedSongURL)])
-                                  audioURL = ((id (*)(id, SEL))objc_msgSend)(fm, @selector(trimmedSongURL));
-                              if (!audioURL && fm && [fm respondsToSelector:@selector(songURL)])
-                                  audioURL = ((id (*)(id, SEL))objc_msgSend)(fm, @selector(songURL));
-                          } @catch (NSException *e) {}
-                          if (audioURL) StartHapticSync(secs, audioURL);
-                      }]];
-                      UIViewController *p = [self presentingVC];
-                      if (p) [p presentViewController:al animated:YES completion:nil];
-                  }];
-              }
-              else if (sender.tag == 2) {
-                  UIViewController *editor = FindEditor();
+              } else if (sender.tag == 1) {
+                  // CHỨC NĂNG 2: NHẬP ẢNH
+                  UIViewController *editor = FindEditorVC();
                   if (!editor || !editor.view.window) {
-                      [self showAlert:@"Chưa Mở Editor"
-                                  msg:@"Hãy mở MultiLayerWizEffectVC trước."];
+                      [self showAlert:@"Chưa Mở Editor" msg:@"Hãy vào màn hình chỉnh sửa layer (MultiLayer) trước."];
                       return;
                   }
                   gCurrentEditor = editor;
@@ -919,32 +474,32 @@ jobs:
                       }
                   } @catch (NSException *e) {
                       gIsAutoFillMode = NO;
-                      [self showAlert:@"Lỗi" msg:e.reason ?: @"Lỗi"];
+                      [self showAlert:@"Lỗi" msg:e.reason ?: @"Lỗi không xác định"];
                   }
               }
           }
           - (void)closeTapped { [self removeFromSuperview]; }
           @end
 
-          // ═══════════ LOGO ═══════════
+          // ═══════════ LOGO (TỰ VẼ TAY) ═══════════
           @interface VladLogoView : UIView
           @end
           @implementation VladLogoView
           - (instancetype)initWithFrame:(CGRect)frame {
               if (self = [super initWithFrame:frame]) {
-                  self.backgroundColor = [UIColor colorWithWhite:0.05 alpha:0.92];
+                  self.backgroundColor = [UIColor colorWithWhite:0.05 alpha:0.95];
                   self.layer.cornerRadius = frame.size.width/2;
-                  self.layer.borderWidth = 2.0;
+                  self.layer.borderWidth = 1.5;
                   self.layer.borderColor = [VladUI neonGreen].CGColor;
                   self.layer.shadowColor = [VladUI neonGreen].CGColor;
-                  self.layer.shadowRadius = 10;
-                  self.layer.shadowOpacity = 1.0;
+                  self.layer.shadowRadius = 8;
+                  self.layer.shadowOpacity = 0.8;
                   self.layer.shadowOffset = CGSizeZero;
                   UILabel *lbl = [[UILabel alloc] initWithFrame:self.bounds];
                   lbl.text = @"V";
                   lbl.textColor = [VladUI neonGreen];
                   lbl.textAlignment = NSTextAlignmentCenter;
-                  lbl.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:28];
+                  lbl.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:26];
                   [self addSubview:lbl];
                   [self addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap)]];
                   [self addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)]];
@@ -973,7 +528,6 @@ jobs:
               [self vlad_viewDidLoad];
               NSString *cls = NSStringFromClass([self class]);
               if ([cls containsString:@"MultiLayerWizEffectVC"]) gCurrentEditor = self;
-              if ([cls containsString:@"VideoReviewEditVC"]) gCurrentSplitVC = self;
           }
           @end
 
@@ -991,7 +545,6 @@ jobs:
                       @try { cs = [NSString stringWithFormat:@"%@", arg1]; } @catch (NSException *e) {}
                       gLastQRCode = cs;
                       VladSaveQR(img, cs);
-                      NSLog(@"[Vlad] QR mới đã lưu (%@)", cs);
                   }
               }
           }
@@ -1004,22 +557,22 @@ jobs:
           - (void)vlad_loadImageAsset:(id)asset {
               [self vlad_loadImageAsset:asset];
               if (!gIsAutoFillMode) return;
-              NSLog(@"[Vlad] loadImageAsset hook fired");
 
-              __weak typeof(self) weakSelf = self;
+              __weak __typeof(self) weakSelf = self;
               NSArray<NSNumber *> *delays = @[@0.1, @0.3, @0.6, @1.0];
               for (NSNumber *d in delays) {
                   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)([d doubleValue] * NSEC_PER_SEC)),
                                  dispatch_get_main_queue(), ^{
                       if (!gIsAutoFillMode) return;
-                      __strong typeof(weakSelf) s = weakSelf;
-                      if (!s) return;
+                      __strong __typeof(weakSelf) strongSelf = weakSelf;
+                      if (!strongSelf) return;
+                      
                       UIImage *img = nil;
-                      @try { img = [s valueForKey:@"layerImage"]; } @catch (NSException *e) {}
+                      @try { img = [strongSelf valueForKey:@"layerImage"]; } @catch (NSException *e) {}
+                      
                       if (img && gCurrentEditor && gCurrentEditor.view.window) {
                           gIsAutoFillMode = NO;
-                          NSInteger n = ApplyImageToAllLayers(gCurrentEditor, img);
-                          NSLog(@"[Vlad] Auto-fill applied to %ld layers", (long)n);
+                          ApplyImageToAllLayers(gCurrentEditor, img);
                       }
                   });
               }
@@ -1061,7 +614,6 @@ jobs:
               VladLogoView *logo = [[VladLogoView alloc] initWithFrame:CGRectMake(sw-66, 120, 50, 50)];
               [gOverlayWindow.rootViewController.view addSubview:logo];
               gOverlayInitialized = YES;
-              NSLog(@"[Vlad] Overlay sẵn sàng");
           }
 
           static void RetryOverlaySetup(int attempt) {
@@ -1112,7 +664,7 @@ jobs:
             tail -200 build.log
             exit 1
           fi
-          echo "✅ $DYLIB"
+          echo "✅ Build thành công: $DYLIB"
           mkdir -p output
           cp "$DYLIB" output/vlad.dylib
           install_name_tool -id "@rpath/vlad.dylib" output/vlad.dylib
