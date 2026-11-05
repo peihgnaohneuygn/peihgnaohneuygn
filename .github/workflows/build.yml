@@ -19,7 +19,6 @@ jobs:
           git clone --depth 1 https://github.com/theos/sdks.git /tmp/sdks
           cp -R /tmp/sdks/iPhoneOS14.5.sdk $THEOS/sdks/
           echo "=== SDK đã cài ==="
-          ls -la $THEOS/sdks/
 
       - name: Setup Tools (ldid & dpkg)
         run: |
@@ -28,11 +27,11 @@ jobs:
       - name: Tạo Build Files
         run: |
           cat << 'EOF' > Makefile
-          ARCHS = arm64
+          ARCHS = arm64 arm64e
           TARGET = iphone:clang:latest:14.0
           include $(THEOS)/makefiles/common.mk
           TWEAK_NAME = VladAuto
-          VladAuto_FILES = Tweak.xm
+          VladAuto_FILES = Tweak.mm
           VladAuto_FRAMEWORKS = UIKit Foundation AVFoundation Photos PhotosUI QuartzCore CoreMedia AudioToolbox
           VladAuto_CFLAGS = -fobjc-arc -Wno-everything -std=c++17
           VladAuto_CCFLAGS = -std=c++17
@@ -50,7 +49,7 @@ jobs:
           Section: Tweaks
           EOF
 
-          cat << 'TWEAKEOF' > Tweak.xm
+          cat << 'TWEAKEOF' > Tweak.mm
           #import <UIKit/UIKit.h>
           #import <AVFoundation/AVFoundation.h>
           #import <Photos/Photos.h>
@@ -537,9 +536,16 @@ jobs:
           }
           @end
 
-          %hook PHPickerViewController
-          - (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
-              %orig;
+          // ==========================================
+          // SWIZZLING VIA OBJC RUNTIME (NO SUBSTRATE NEEDED)
+          // ==========================================
+
+          @interface PHPickerViewController (VladHook)
+          - (void)vlad_picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results;
+          @end
+          @implementation PHPickerViewController (VladHook)
+          - (void)vlad_picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
+              [self vlad_picker:picker didFinishPicking:results];
               @try {
                   if (results.count > 0) {
                       NSItemProvider *provider = results.firstObject.itemProvider;
@@ -556,41 +562,51 @@ jobs:
                   }
               } @catch (NSException *e) {}
           }
-          %end
+          @end
 
-          %hook UIViewController
-          - (void)viewDidLoad {
-              %orig;
+          @interface UIViewController (VladHook)
+          - (void)vlad_viewDidLoad;
+          @end
+          @implementation UIViewController (VladHook)
+          - (void)vlad_viewDidLoad {
+              [self vlad_viewDidLoad];
               NSString *cls = NSStringFromClass([self class]);
               if ([cls containsString:@"MultiLayerWizEffectVC"] || [cls containsString:@"Editor"]) {
                   gCurrentEditor = self;
               }
           }
-          %end
+          @end
 
-          %hook AVPlayer
-          - (void)play {
-              %orig;
+          @interface AVPlayer (VladHook)
+          - (void)vlad_play;
+          @end
+          @implementation AVPlayer (VladHook)
+          - (void)vlad_play {
+              [self vlad_play];
               gCurrentPlayer = self;
               AVPlayerItem *item = self.currentItem;
               if (item && [item.asset isKindOfClass:[AVURLAsset class]]) {
                   gCurrentAudioURL = ((AVURLAsset *)item.asset).URL;
               }
           }
-          %end
+          @end
 
-          %hook AVAudioPlayer
-          - (instancetype)initWithContentsOfURL:(NSURL *)url error:(NSError **)error {
-              id r = %orig;
+          @interface AVAudioPlayer (VladHook)
+          - (instancetype)vlad_initWithContentsOfURL:(NSURL *)url error:(NSError **)error;
+          - (BOOL)vlad_play;
+          @end
+          @implementation AVAudioPlayer (VladHook)
+          - (instancetype)vlad_initWithContentsOfURL:(NSURL *)url error:(NSError **)error {
+              id r = [self vlad_initWithContentsOfURL:url error:error];
               if (r && url) gCurrentAudioURL = url;
               return r;
           }
-          - (BOOL)play {
-              BOOL r = %orig;
+          - (BOOL)vlad_play {
+              BOOL r = [self vlad_play];
               if (self.url) gCurrentAudioURL = self.url;
               return r;
           }
-          %end
+          @end
 
           static void autoFillSmart(UIViewController *editor) {
               if (!editor || !gLastQRImage) return;
@@ -612,19 +628,42 @@ jobs:
               }
           }
 
-          %ctor {
-              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-                  if (!gOverlayWindow) {
-                      gOverlayWindow = [[VSPassthroughWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-                      gOverlayWindow.windowLevel = UIWindowLevelAlert + 10;
-                      gOverlayWindow.backgroundColor = [UIColor clearColor];
-                      gOverlayWindow.rootViewController = [[UIViewController alloc] init];
-                      gOverlayWindow.rootViewController.view.backgroundColor = [UIColor clearColor];
-                      gOverlayWindow.hidden = NO;
-                      VladLogoView *logo = [[VladLogoView alloc] initWithFrame:CGRectMake([UIScreen mainScreen].bounds.size.width - 70, 150, 60, 60)];
-                      [gOverlayWindow.rootViewController.view addSubview:logo];
-                  }
-              });
+          __attribute__((constructor))
+          static void initVlad() {
+              @autoreleasepool {
+                  Method orig1 = class_getInstanceMethod([PHPickerViewController class], @selector(picker:didFinishPicking:));
+                  Method new1 = class_getInstanceMethod([PHPickerViewController class], @selector(vlad_picker:didFinishPicking:));
+                  if (orig1 && new1) method_exchangeImplementations(orig1, new1);
+
+                  Method orig2 = class_getInstanceMethod([UIViewController class], @selector(viewDidLoad));
+                  Method new2 = class_getInstanceMethod([UIViewController class], @selector(vlad_viewDidLoad));
+                  if (orig2 && new2) method_exchangeImplementations(orig2, new2);
+
+                  Method orig3 = class_getInstanceMethod([AVPlayer class], @selector(play));
+                  Method new3 = class_getInstanceMethod([AVPlayer class], @selector(vlad_play));
+                  if (orig3 && new3) method_exchangeImplementations(orig3, new3);
+
+                  Method orig4 = class_getInstanceMethod([AVAudioPlayer class], @selector(initWithContentsOfURL:error:));
+                  Method new4 = class_getInstanceMethod([AVAudioPlayer class], @selector(vlad_initWithContentsOfURL:error:));
+                  if (orig4 && new4) method_exchangeImplementations(orig4, new4);
+
+                  Method orig5 = class_getInstanceMethod([AVAudioPlayer class], @selector(play));
+                  Method new5 = class_getInstanceMethod([AVAudioPlayer class], @selector(vlad_play));
+                  if (orig5 && new5) method_exchangeImplementations(orig5, new5);
+
+                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                      if (!gOverlayWindow) {
+                          gOverlayWindow = [[VSPassthroughWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+                          gOverlayWindow.windowLevel = UIWindowLevelAlert + 10;
+                          gOverlayWindow.backgroundColor = [UIColor clearColor];
+                          gOverlayWindow.rootViewController = [[UIViewController alloc] init];
+                          gOverlayWindow.rootViewController.view.backgroundColor = [UIColor clearColor];
+                          gOverlayWindow.hidden = NO;
+                          VladLogoView *logo = [[VladLogoView alloc] initWithFrame:CGRectMake([UIScreen mainScreen].bounds.size.width - 70, 150, 60, 60)];
+                          [gOverlayWindow.rootViewController.view addSubview:logo];
+                      }
+                  });
+              }
           }
           TWEAKEOF
 
@@ -633,22 +672,24 @@ jobs:
           set -o pipefail
           make clean || true
           make -j1 VERBOSE=1 2>&1 | tee build.log
+          
+          echo "=== Đóng gói file Dylib ==="
+          DYLIB_PATH=$(find .theos/obj -name "VladAuto.dylib" -type f | head -n 1)
+          echo "Tìm thấy: $DYLIB_PATH"
+          
+          mkdir -p output
+          cp "$DYLIB_PATH" output/vlad.dylib
+          
+          cd output
+          zip -r vlad.zip vlad.dylib
+          cd ..
           echo "=== build xong ==="
 
-      - name: Verify
-        run: |
-          echo "=== dylib ==="
-          find .theos/obj -name "*.dylib" -type f -exec ls -la {} \;
-          test -n "$(find .theos/obj -name '*.dylib' -type f)" || (echo "KHÔNG có dylib!" && exit 1)
-
-      - name: Package .deb
-        run: make package FINALPACKAGE=1 || true
-
-      - name: Upload Dylib
+      - name: Upload Vlad Zip
         uses: actions/upload-artifact@v4
         with:
-          name: VladTool-dylib
-          path: .theos/obj/**/*.dylib
+          name: vlad-zip
+          path: output/vlad.zip
           if-no-files-found: error
 
       - name: Upload Deb
