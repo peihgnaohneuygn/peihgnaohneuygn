@@ -17,24 +17,30 @@ jobs:
           echo "THEOS=$HOME/theos" >> $GITHUB_ENV
           echo "$HOME/theos/bin" >> $GITHUB_PATH
 
-      - name: Download SDK
+      - name: Download iOS SDK 16.4
         run: |
           set -e
           mkdir -p $THEOS/sdks
           git clone --depth 1 https://github.com/theos/sdks.git /tmp/sdks
-          cp -R /tmp/sdks/iPhoneOS14.5.sdk $THEOS/sdks/
+          cp -R /tmp/sdks/iPhoneOS16.4.sdk $THEOS/sdks/
+          ls -la $THEOS/sdks/
 
       - name: Create Makefile & Tweak.mm
         run: |
           cat > Makefile << 'MAKEEOF'
           ARCHS = arm64 arm64e
-          TARGET = iphone:clang:14.5:14.0
+          TARGET = iphone:clang:16.4:14.0
           include $(THEOS)/makefiles/common.mk
+
           LIBRARY_NAME = VladAuto
           VladAuto_FILES = Tweak.mm
           VladAuto_FRAMEWORKS = UIKit Foundation AVFoundation Photos PhotosUI QuartzCore CoreMedia AudioToolbox UniformTypeIdentifiers
-          VladAuto_CFLAGS  = -fobjc-arc -w
-          VladAuto_CCFLAGS = -fobjc-arc -w -std=c++17
+          
+          VladAuto_CFLAGS  = -fobjc-arc -w -stdlib=libc++ -I$(THEOS)/sdks/iPhoneOS16.4.sdk/usr/include/c++/v1
+          VladAuto_CCFLAGS = -fobjc-arc -w -std=c++17 -stdlib=libc++ -I$(THEOS)/sdks/iPhoneOS16.4.sdk/usr/include/c++/v1
+          VladAuto_USE_MODULES = 0
+          VladAuto_LDFLAGS = -stdlib=libc++
+
           include $(THEOS_MAKE_PATH)/library.mk
           MAKEEOF
 
@@ -50,7 +56,7 @@ jobs:
           #import <AudioToolbox/AudioToolbox.h>
           #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
-          // ═══════════ FORWARD DECLS (đúng theo dump) ═══════════
+          // ═══════════ FORWARD DECLS (THEO ĐÚNG DUMP) ═══════════
           @interface MeterAndBPMModel : NSObject
           + (instancetype)sharedInstance;
           - (NSArray *)beatFrameOffsetsForScene:(NSInteger)scene project:(id)project;
@@ -180,7 +186,6 @@ jobs:
                   }
                   NSLog(@"[Vlad] Đã áp dụng %ld layer", (long)applied);
 
-                  // FIX #3: ưu tiên updatePreview (không cần param), fallback updateDisplayAtFrame:0
                   if ([editor respondsToSelector:NSSelectorFromString(@"updatePreview")]) {
                       ((void (*)(id, SEL))objc_msgSend)(editor, NSSelectorFromString(@"updatePreview"));
                   } else if ([editor respondsToSelector:NSSelectorFromString(@"updateDisplayAtFrame:")]) {
@@ -239,7 +244,7 @@ jobs:
                       if (MeterClass && [MeterClass respondsToSelector:@selector(sharedInstance)])
                           meter = ((id (*)(id, SEL))objc_msgSend)(MeterClass, @selector(sharedInstance));
 
-                      // ── Cách 1: BPM có sẵn trong project ──
+                      // Cách 1: BPM có sẵn trong project
                       if (songBPM > 0 && songFBT >= 0 && songDuration > 0 && meter) {
                           SEL sel = NSSelectorFromString(@"beatFrameOffsetsForBPM:firstBeatTime:duration:startOffset:");
                           if ([meter respondsToSelector:sel]) {
@@ -250,7 +255,7 @@ jobs:
                           }
                       }
 
-                      // ── Cách 2: hỏi MeterAndBPMModel theo scene ──
+                      // Cách 2: Hỏi MeterAndBPMModel theo scene
                       if (!times && meter) {
                           SEL sel = NSSelectorFromString(@"beatFrameOffsetsForScene:project:");
                           if ([meter respondsToSelector:sel]) {
@@ -260,7 +265,7 @@ jobs:
                           }
                       }
 
-                      // ── Cách 3 (FIX #2): CLASS method cho audio analysis ──
+                      // Cách 3: CLASS method cho audio analysis
                       if (!times && meter) {
                           NSURL *audioURL = nil;
                           @try {
@@ -274,7 +279,6 @@ jobs:
                           SEL selA = NSSelectorFromString(@"bpmAndFirstBeatTimeFromAudioFileAtPath:");
                           NSDictionary *res = nil;
                           if (audioURL) {
-                              // Ưu tiên CLASS method
                               if (MeterClass && [MeterClass respondsToSelector:selA])
                                   res = ((id (*)(id, SEL, NSString *))objc_msgSend)(MeterClass, selA, audioURL.path);
                               else if ([meter respondsToSelector:selA])
@@ -311,7 +315,7 @@ jobs:
           }
           @end
 
-          // ═══════════ SPLIT SCENE (FIX #1, #6, #7) ═══════════
+          // ═══════════ SPLIT SCENE ═══════════
           static void SplitSceneWithTimes(UIViewController *splitVC,
                                           NSArray<NSValue *> *times,
                                           void(^completion)(NSError *error, NSInteger splitCount)) {
@@ -321,7 +325,6 @@ jobs:
                   return;
               }
               @try {
-                  // FIX #8: try 2 tên ProjectManager (Swift namespaced)
                   id project = nil;
                   if ([splitVC respondsToSelector:@selector(project)])
                       project = ((id (*)(id, SEL))objc_msgSend)(splitVC, @selector(project));
@@ -341,12 +344,10 @@ jobs:
                       return;
                   }
 
-                  // FIX #9: sceneIndex dùng unsigned long long cho khớp Q
                   unsigned long long sceneIndex = 0;
                   if ([splitVC respondsToSelector:@selector(sceneIndex)])
                       sceneIndex = ((unsigned long long (*)(id, SEL))objc_msgSend)(splitVC, @selector(sceneIndex));
 
-                  // Scene count BEFORE (dùng để poll success)
                   unsigned long long startCount = 0;
                   if ([project respondsToSelector:@selector(sceneCount)])
                       startCount = ((unsigned long long (*)(id, SEL))objc_msgSend)(project, @selector(sceneCount));
@@ -359,13 +360,6 @@ jobs:
                   }
 
                   NSMethodSignature *sig = [project methodSignatureForSelector:sel];
-
-                  // Pre-flight: log signature để debug nếu crash
-                  NSMutableString *sigStr = [NSMutableString string];
-                  for (NSUInteger i = 0; i < sig.numberOfArguments; i++)
-                      [sigStr appendFormat:@"%s ", [sig getArgumentTypeAtIndex:i]];
-                  NSLog(@"[Vlad] multiSplit sig: %@", sigStr);
-
                   NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
                   [inv setTarget:project];
                   [inv setSelector:sel];
@@ -376,7 +370,6 @@ jobs:
                   id nilProgress = nil;
                   [inv setArgument:&nilProgress atIndex:4];
 
-                  // FIX #1 + #7: no-arg no-op block, heap-copied → universal safe
                   __block BOOL blockFired = NO;
                   void (^noop)(void) = ^{
                       blockFired = YES;
@@ -389,7 +382,6 @@ jobs:
                         sceneIndex, (unsigned long)times.count);
                   [inv invoke];
 
-                  // FIX #7: poll sceneCount để detect success dù block có fire hay không
                   __block NSInteger polls = 0;
                   __block void (^checkSuccess)(void);
                   checkSuccess = ^{
@@ -398,7 +390,7 @@ jobs:
                           return;
                       }
                       polls++;
-                      if (polls > 200) { // 60 giây
+                      if (polls > 200) {
                           if (completion) completion([NSError errorWithDomain:@"Vlad" code:99
                               userInfo:@{NSLocalizedDescriptionKey:
                                   @"Timeout sau 60s.\nCó thể đã xong - hãy kiểm tra app."}],
@@ -579,9 +571,8 @@ jobs:
           - (void)closeTapped { [self dismissViewControllerAnimated:YES completion:nil]; }
           @end
 
-          // ═══════════ VC HIERARCHY WALK (FIX #9) ═══════════
-          static UIViewController *FindVCInHierarchy(UIViewController *root,
-                                                     BOOL(^matcher)(NSString *cls)) {
+          // ═══════════ VC HIERARCHY WALK ═══════════
+          static UIViewController *FindVCInHierarchy(UIViewController *root, BOOL(^matcher)(NSString *cls)) {
               if (!root || !matcher) return nil;
               NSString *cls = NSStringFromClass([root class]);
               if (matcher(cls)) return root;
@@ -812,7 +803,7 @@ jobs:
                   }
               }
               if (!kw) kw = [UIApplication sharedApplication].keyWindow;
-              if (!kw && gOverlayWindow) kw = gOverlayWindow;  // FIX #5
+              if (!kw && gOverlayWindow) kw = gOverlayWindow;
               UIViewController *vc = kw.rootViewController;
               while (vc.presentedViewController) vc = vc.presentedViewController;
               return vc;
@@ -865,7 +856,6 @@ jobs:
                       if (!self) return;
                       if (error) { [self showAlert:@"Lỗi" msg:error.localizedDescription]; return; }
 
-                      // FIX #6: cap ở 60 phân cảnh, sample đều
                       NSArray<NSValue *> *toUse = times;
                       if (times.count > 60) {
                           NSInteger step = (times.count + 59) / 60;
@@ -873,7 +863,7 @@ jobs:
                           for (NSInteger i = 0; i < (NSInteger)times.count; i += step)
                               [sampled addObject:times[i]];
                           toUse = sampled;
-                          NSLog(@"[Vlad] Cap %lu → %lu splits (step %ld)",
+                          NSLog(@"[Vlad] Cap %lu -> %lu splits (step %ld)",
                                 (unsigned long)times.count, (unsigned long)toUse.count, (long)step);
                       }
 
@@ -1019,7 +1009,6 @@ jobs:
               NSLog(@"[Vlad] loadImageAsset hook fired");
 
               __weak typeof(self) weakSelf = self;
-              // FIX #4: retry 4 lần (0.1, 0.3, 0.6, 1.0s)
               NSArray<NSNumber *> *delays = @[@0.1, @0.3, @0.6, @1.0];
               for (NSNumber *d in delays) {
                   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)([d doubleValue] * NSEC_PER_SEC)),
@@ -1039,7 +1028,7 @@ jobs:
           }
           @end
 
-          // ═══════════ OVERLAY SETUP (FIX #10) ═══════════
+          // ═══════════ OVERLAY SETUP ═══════════
           static void TrySetupOverlay(void) {
               if (gOverlayInitialized) return;
               UIWindow *keyWin = nil;
