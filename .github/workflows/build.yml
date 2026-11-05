@@ -1,4 +1,4 @@
-name: Build Vlad Tool Video Star (Neon White Edition)
+name: Build Vlad Tool Video Star (Fixed)
 
 on:
   push:
@@ -28,17 +28,17 @@ jobs:
       - name: Create Makefile & Tweak.mm
         run: |
           cat > Makefile << 'MAKEEOF'
-          ARCHS = arm64 arm64e
+          ARCHS = arm64
           TARGET = iphone:clang:16.5:14.0
           include $(THEOS)/makefiles/common.mk
 
           LIBRARY_NAME = VladAuto
           VladAuto_FILES = Tweak.mm
-          VladAuto_FRAMEWORKS = UIKit Foundation Photos PhotosUI QuartzCore UniformTypeIdentifiers
+          VladAuto_FRAMEWORKS = UIKit Foundation QuartzCore
           
           VladAuto_CFLAGS  = -fobjc-arc -w
           VladAuto_CCFLAGS = -fobjc-arc -w -std=c++17 -stdlib=libc++
-          VladAuto_LDFLAGS = -stdlib=libc++ -Wl,-undefined,dynamic_lookup
+          VladAuto_LDFLAGS = -Wl,-flat_namespace,-undefined,suppress
           VladAuto_USE_MODULES = 0
 
           include $(THEOS_MAKE_PATH)/library.mk
@@ -63,20 +63,15 @@ jobs:
           static BOOL gIsAutoFillMode = NO;
           static BOOL gOverlayInitialized = NO;
 
-          // ═══════════ NEON WHITE & BLACK THEME UI ═══════════
           @interface VladUI : NSObject
           + (UIColor *)neonWhite;
-          + (UIColor *)neonWhiteGlow;
           + (UIColor *)neonBlackBg;
-          + (UIColor *)panelBg;
           + (UIImage *)icon:(NSString *)name size:(CGFloat)size color:(UIColor *)color;
           @end
 
           @implementation VladUI
           + (UIColor *)neonWhite { return [UIColor colorWithWhite:1.0 alpha:1.0]; }
-          + (UIColor *)neonWhiteGlow { return [UIColor colorWithWhite:1.0 alpha:0.85]; }
           + (UIColor *)neonBlackBg { return [UIColor colorWithRed:0.04 green:0.04 blue:0.04 alpha:0.96]; }
-          + (UIColor *)panelBg { return [UIColor colorWithRed:0.07 green:0.07 blue:0.08 alpha:0.98]; }
           + (UIImage *)icon:(NSString *)name size:(CGFloat)size color:(UIColor *)color {
               if (@available(iOS 13.0, *)) {
                   UIImage *img = [UIImage systemImageNamed:name];
@@ -237,7 +232,6 @@ jobs:
               return nil;
           }
 
-          // ═══════════ NEON WHITE QR PREVIEW VC ═══════════
           @interface VladQRPreviewVC : UIViewController
           @property (nonatomic, strong) UIImage *qrImage;
           @property (nonatomic, copy)   NSString *qrCode;
@@ -262,8 +256,6 @@ jobs:
               iv.backgroundColor = [UIColor blackColor];
               iv.layer.borderWidth = 1.5;
               iv.layer.borderColor = [VladUI neonWhite].CGColor;
-              iv.layer.shadowColor = [VladUI neonWhite].CGColor;
-              iv.layer.shadowRadius = 15; iv.layer.shadowOpacity = 0.6;
               iv.translatesAutoresizingMaskIntoConstraints = NO;
               [self.view addSubview:iv];
 
@@ -272,8 +264,6 @@ jobs:
               title.textColor = [VladUI neonWhite];
               title.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:22];
               title.textAlignment = NSTextAlignmentCenter;
-              title.layer.shadowColor = [VladUI neonWhite].CGColor;
-              title.layer.shadowRadius = 8; title.layer.shadowOpacity = 0.8; title.layer.shadowOffset = CGSizeZero;
               title.translatesAutoresizingMaskIntoConstraints = NO;
               [self.view addSubview:title];
 
@@ -302,8 +292,6 @@ jobs:
               close.backgroundColor = [VladUI neonWhite];
               close.layer.cornerRadius = 22;
               close.titleLabel.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:15];
-              close.layer.shadowColor = [VladUI neonWhite].CGColor;
-              close.layer.shadowRadius = 10; close.layer.shadowOpacity = 0.7; close.layer.shadowOffset = CGSizeZero;
               close.translatesAutoresizingMaskIntoConstraints = NO;
               [close addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
               [self.view addSubview:close];
@@ -366,7 +354,6 @@ jobs:
           - (void)closeTapped { [self dismissViewControllerAnimated:YES completion:nil]; }
           @end
 
-          // ═══════════ NEON WHITE & BLACK MENU VIEW ═══════════
           @interface VladMenuView : UIView
           @property (nonatomic, strong) UIView *panel;
           @end
@@ -387,9 +374,6 @@ jobs:
                   self.panel.layer.cornerRadius = 20;
                   self.panel.layer.borderWidth = 1.8;
                   self.panel.layer.borderColor = [VladUI neonWhite].CGColor;
-                  self.panel.layer.shadowColor = [VladUI neonWhite].CGColor;
-                  self.panel.layer.shadowRadius = 18; self.panel.layer.shadowOpacity = 0.75;
-                  self.panel.layer.shadowOffset = CGSizeZero;
                   [self.panel addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:nil action:nil]];
                   [self addSubview:self.panel];
 
@@ -398,8 +382,6 @@ jobs:
                   title.textColor = [VladUI neonWhite];
                   title.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:20];
                   title.textAlignment = NSTextAlignmentCenter;
-                  title.layer.shadowColor = [VladUI neonWhite].CGColor;
-                  title.layer.shadowRadius = 6; title.layer.shadowOpacity = 0.9; title.layer.shadowOffset = CGSizeZero;
                   [self.panel addSubview:title];
 
                   UILabel *subtitle = [[UILabel alloc] initWithFrame:CGRectMake(15, 52, pw-30, 16)];
@@ -516,7 +498,6 @@ jobs:
           - (void)closeTapped { [self removeFromSuperview]; }
           @end
 
-          // ═══════════ NEON WHITE LOGO BUTTON ═══════════
           @interface VladLogoView : UIView
           @end
           @implementation VladLogoView
@@ -526,18 +507,12 @@ jobs:
                   self.layer.cornerRadius = frame.size.width/2;
                   self.layer.borderWidth = 1.8;
                   self.layer.borderColor = [VladUI neonWhite].CGColor;
-                  self.layer.shadowColor = [VladUI neonWhite].CGColor;
-                  self.layer.shadowRadius = 12;
-                  self.layer.shadowOpacity = 0.9;
-                  self.layer.shadowOffset = CGSizeZero;
 
                   UILabel *lbl = [[UILabel alloc] initWithFrame:self.bounds];
                   lbl.text = @"V";
                   lbl.textColor = [VladUI neonWhite];
                   lbl.textAlignment = NSTextAlignmentCenter;
                   lbl.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:26];
-                  lbl.layer.shadowColor = [VladUI neonWhite].CGColor;
-                  lbl.layer.shadowRadius = 6; lbl.layer.shadowOpacity = 1.0; lbl.layer.shadowOffset = CGSizeZero;
                   [self addSubview:lbl];
 
                   [self addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap)]];
