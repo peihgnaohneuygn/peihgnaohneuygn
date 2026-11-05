@@ -52,6 +52,13 @@ jobs:
           #import <objc/runtime.h>
           #import <objc/message.h>
 
+          // ═══════════ KHAI BÁO CLASS GỐC (BẮT BUỘC ĐỂ HẾT LỖI) ═══════════
+          @interface QRCodeManager : NSObject
+          @end
+
+          @interface MultiLayerImageGenerator : NSObject
+          @end
+
           // ═══════════ GLOBALS ═══════════
           static UIImage  *gLastQRImage = nil;
           static NSString *gLastQRCode  = nil;
@@ -341,7 +348,7 @@ jobs:
 
                   CGFloat sw = UIScreen.mainScreen.bounds.size.width;
                   CGFloat pw = MIN(300, sw - 40);
-                  CGFloat ph = 280; // Chiều cao vừa đủ cho 2 nút
+                  CGFloat ph = 280;
 
                   self.panel = [[UIView alloc] initWithFrame:CGRectMake(0, 0, pw, ph)];
                   self.panel.center = self.center;
@@ -355,7 +362,6 @@ jobs:
                   [self.panel addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:nil action:nil]];
                   [self addSubview:self.panel];
 
-                  // Title & Subtitle
                   UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(15, 25, pw-30, 25)];
                   title.text = @"Vlad Tool Video Star";
                   title.textColor = [VladUI neonWhite];
@@ -370,7 +376,6 @@ jobs:
                   subtitle.textAlignment = NSTextAlignmentCenter;
                   [self.panel addSubview:subtitle];
 
-                  // Close button (X)
                   UIButton *close = [UIButton buttonWithType:UIButtonTypeCustom];
                   close.frame = CGRectMake(pw-35, 15, 30, 30);
                   [close setImage:[VladUI icon:@"xmark.circle.fill" size:20 color:[UIColor darkGrayColor]]
@@ -378,7 +383,6 @@ jobs:
                   [close addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
                   [self.panel addSubview:close];
 
-                  // 2 NÚT CHỨC NĂNG
                   NSArray *titles = @[@"Xem Code Gần Nhất", @"Tự Động Nhập Ảnh"];
                   NSArray *icons = @[@"qrcode.viewfinder", @"photo.on.rectangle.angled"];
                   
@@ -442,7 +446,6 @@ jobs:
 
           - (void)funcTapped:(UIButton *)sender {
               if (sender.tag == 0) {
-                  // CHỨC NĂNG 1: XEM CODE
                   if (!gLastQRImage) gLastQRImage = VladLoadQRImage();
                   if (!gLastQRCode) gLastQRCode = VladLoadQRCode();
                   if (!gLastQRImage) {
@@ -455,7 +458,6 @@ jobs:
                       if (p) [p presentViewController:vc animated:YES completion:nil];
                   });
               } else if (sender.tag == 1) {
-                  // CHỨC NĂNG 2: NHẬP ẢNH
                   UIViewController *editor = FindEditorVC();
                   if (!editor || !editor.view.window) {
                       [self showAlert:@"Chưa Mở Editor" msg:@"Hãy vào màn hình chỉnh sửa layer (MultiLayer) trước."];
@@ -519,7 +521,7 @@ jobs:
           }
           @end
 
-          // ═══════════ HOOKS ═══════════
+          // ═══════════ HOOKS (ĐÃ FIX KHAI BÁO) ═══════════
           @interface UIViewController (VladHook)
           - (void)vlad_viewDidLoad;
           @end
