@@ -1,4 +1,4 @@
-name: Build Vlad Tool Video Star (Final Fix)
+name: Build Vlad Tool Video Star (Fix ldid)
 
 on:
   push:
@@ -24,6 +24,10 @@ jobs:
           git clone --depth 1 https://github.com/theos/sdks.git /tmp/sdks
           cp -R /tmp/sdks/iPhoneOS16.5.sdk $HOME/theos/sdks/
           rm -rf /tmp/sdks
+
+      - name: Install ldid & dpkg (Fix Error 127)
+        run: |
+          brew install ldid dpkg
 
       - name: Create Makefile & Tweak.mm
         run: |
