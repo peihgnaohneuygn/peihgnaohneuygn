@@ -76,19 +76,50 @@ jobs:
                   }
                   free(classes);
 
-                  // Lưu ra file trong thư mục Documents của app
-                  NSString *docsDir = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-                  NSString *filePath = [docsDir stringByAppendingPathComponent:@"VladDump.txt"];
-                  [log writeToFile:filePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
-                  
                   dispatch_async(dispatch_get_main_queue(), ^{
-                      // Hiện thông báo đường dẫn file
+                      // Tạo màn hình hiển thị code
+                      UIViewController *textVC = [[UIViewController alloc] init];
+                      textVC.view.backgroundColor = [UIColor blackColor];
+                      
+                      UITextView *tv = [[UITextView alloc] initWithFrame:CGRectMake(0, 50, textVC.view.bounds.size.width, textVC.view.bounds.size.height - 100)];
+                      tv.text = log;
+                      tv.textColor = [UIColor greenColor];
+                      tv.backgroundColor = [UIColor blackColor];
+                      tv.font = [UIFont fontWithName:@"Courier" size:10];
+                      tv.editable = NO;
+                      [textVC.view addSubview:tv];
+                      
+                      // Nút Copy
+                      UIButton *copyBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+                      copyBtn.frame = CGRectMake(20, 10, 150, 40);
+                      [copyBtn setTitle:@"COPY TOÀN BỘ" forState:UIControlStateNormal];
+                      copyBtn.backgroundColor = [UIColor greenColor];
+                      [copyBtn setTitleColor:[UIColor blackColor] forState:UIControlStateNormal];
+                      copyBtn.layer.cornerRadius = 8;
+                      [copyBtn addTarget:gOverlayWindow.rootViewController action:NSSelectorFromString(@"dummy") forControlEvents:UIControlEventTouchUpInside];
+                      // Gắn action bằng block
+                      [copyBtn addAction:[UIAction actionWithHandler:^(__kindof UIAction * _Nonnull action) {
+                          [UIPasteboard generalPasteboard].string = log;
+                          UIAlertController *al = [UIAlertController alertControllerWithTitle:@"Đã Copy" message:@"Mày dán vào chat cho tao nhé!" preferredStyle:UIAlertControllerStyleAlert];
+                          [al addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                          [textVC presentViewController:al animated:YES completion:nil];
+                      }] forControlEvents:UIControlEventTouchUpInside];
+                      [textVC.view addSubview:copyBtn];
+                      
+                      // Nút Đóng
+                      UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+                      closeBtn.frame = CGRectMake(textVC.view.bounds.size.width - 100, 10, 80, 40);
+                      [closeBtn setTitle:@"ĐÓNG" forState:UIControlStateNormal];
+                      closeBtn.backgroundColor = [UIColor redColor];
+                      [closeBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+                      closeBtn.layer.cornerRadius = 8;
+                      [closeBtn addAction:[UIAction actionWithHandler:^(__kindof UIAction * _Nonnull action) {
+                          [textVC dismissViewControllerAnimated:YES completion:nil];
+                      }] forControlEvents:UIControlEventTouchUpInside];
+                      [textVC.view addSubview:closeBtn];
+                      
                       UIWindow *win = [UIApplication sharedApplication].windows.firstObject;
-                      UIAlertController *al = [UIAlertController alertControllerWithTitle:@"DUMP THÀNH CÔNG" 
-                                                                                 message:[NSString stringWithFormat:@"File lưu tại:\n%@", filePath] 
-                                                                          preferredStyle:UIAlertControllerStyleAlert];
-                      [al addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-                      [win.rootViewController presentViewController:al animated:YES completion:nil];
+                      [win.rootViewController presentViewController:textVC animated:YES completion:nil];
                   });
               });
           }
