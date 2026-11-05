@@ -18,7 +18,7 @@ jobs:
       with:
         xcode-version: latest
 
-    - name: Create Source Files
+    - name: Write Full Source Code Files
       run: |
         cat << 'EOF' > VladVideoStarTool.h
         #import <UIKit/UIKit.h>
@@ -46,7 +46,9 @@ jobs:
 
         static VladVideoStarToolUI *sharedUI = nil;
 
-        // --- UNLOCK PRO & OPTIMIZATION ---
+        // ============================================================================
+        // 🔓 UNLOCK FULL 100% VIDEO STAR PRO & BOOST HIỆU NĂNG / FIX CRASH / FIX LAG
+        // ============================================================================
         %hook VSProManager
         - (BOOL)isProRegistered { return YES; }
         - (BOOL)hasProSubscription { return YES; }
@@ -74,7 +76,9 @@ jobs:
         - (NSInteger)preferredFPS { return 60; }
         %end
 
-        // --- UI PANEL & LOGIC ---
+        // ============================================================================
+        // 🎨 UI PANEL "Vlad Video Star Tool" (Neon Border + 2 Tab + 3 Chức Năng)
+        // ============================================================================
         @implementation VladVideoStarToolUI
 
         + (instancetype)sharedInstance {
@@ -104,6 +108,7 @@ jobs:
             self.panelView.clipsToBounds = NO;
             [self addSubview:self.panelView];
             
+            // Viền Neon Chuyển Màu
             self.neonBorderLayer = [CAGradientLayer layer];
             self.neonBorderLayer.frame = CGRectInset(self.panelView.bounds, -2, -2);
             self.neonBorderLayer.colors = @[
