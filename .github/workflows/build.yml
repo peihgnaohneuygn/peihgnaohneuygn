@@ -48,6 +48,9 @@ jobs:
           #import <AudioToolbox/AudioToolbox.h>
           #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
+          // ==========================================
+          // BIẾN TOÀN CỤC
+          // ==========================================
           static UIImage *gLastQRImage = nil;
           static UIWindow *gOverlayWindow = nil;
           static UIViewController *gCurrentEditor = nil;
@@ -57,11 +60,115 @@ jobs:
           static double gDetectedBPM = 0;
           static id gTimeObserver = nil;
 
-          static void autoFillSmart(UIViewController *editor);
-          static void autoSplitEditor(UIViewController *editor, NSArray<NSNumber *> *beats);
+          // ==========================================
+          // LÕI TIỆN ÍCH RUNTIME (CHỐNG CRASH 100%)
+          // ==========================================
+          @interface VladRuntime : NSObject
+          + (id)safeGet:(NSString *)key from:(id)target;
+          + (void)safeSet:(id)value forKey:(NSString *)key to:(id)target;
+          + (void)applyImage:(UIImage *)image toEditor:(UIViewController *)editor;
+          + (void)splitEditor:(UIViewController *)editor withBeats:(NSArray<NSNumber *> *)beats;
+          @end
+
+          @implementation VladRuntime
+          + (id)safeGet:(NSString *)key from:(id)target {
+              if (!target) return nil;
+              @try {
+                  SEL sel = NSSelectorFromString(key);
+                  if ([target respondsToSelector:sel]) {
+                      return [target performSelector:sel];
+                  }
+              } @catch (NSException *e) {}
+              return nil;
+          }
+
+          + (void)safeSet:(id)value forKey:(NSString *)key to:(id)target {
+              if (!target) return;
+              @try {
+                  NSString *setterName = [NSString stringWithFormat:@"set%@%@:", [[key substringToIndex:1] uppercaseString], [key substringFromIndex:1]];
+                  SEL sel = NSSelectorFromString(setterName);
+                  if ([target respondsToSelector:sel]) {
+                      [target setValue:value forKey:key];
+                  }
+              } @catch (NSException *e) {}
+          }
+
+          + (void)applyImage:(UIImage *)image toEditor:(UIViewController *)editor {
+              if (!editor || !image) return;
+              @try {
+                  // 1. Can thiệp qua Engine (chuẩn tool gốc)
+                  id engine = [self safeGet:@"engine" from:editor];
+                  if (!engine) engine = [self safeGet:@"project" from:editor];
+                  
+                  if (engine) {
+                      NSArray *layers = [self safeGet:@"layers" from:engine];
+                      if (!layers) layers = [self safeGet:@"mediaLayers" from:engine];
+                      if ([layers isKindOfClass:[NSArray class]]) {
+                          for (id layer in layers) {
+                              [self safeSet:image forKey:@"image" to:layer];
+                              [self safeSet:image forKey:@"thumbnail" to:layer];
+                          }
+                      }
+                  }
+                  
+                  // 2. Quét View dự phòng (bỏ qua lớp trống, icon nhỏ)
+                  NSMutableArray *imageViews = [NSMutableArray array];
+                  __block void (^search)(UIView *);
+                  search = ^(UIView *parent) {
+                      for (UIView *sub in parent.subviews) {
+                          if ([sub isKindOfClass:[UIImageView class]]) [imageViews addObject:sub];
+                          search(sub);
+                      }
+                  };
+                  search(editor.view);
+                  
+                  for (UIImageView *iv in imageViews) {
+                      if (iv.bounds.size.width > 50 && iv.bounds.size.height > 50 && iv.image != nil && iv.tag != 888) {
+                          iv.image = image;
+                      }
+                  }
+              } @catch (NSException *e) {}
+          }
+
+          + (void)splitEditor:(UIViewController *)editor withBeats:(NSArray<NSNumber *> *)beats {
+              if (!editor || beats.count == 0) return;
+              @try {
+                  // Dò tìm hàm chia cảnh trong Editor
+                  NSMutableArray *methodsToCall = [NSMutableArray array];
+                  unsigned int count;
+                  Method *methods = class_copyMethodList([editor class], &count);
+                  for (int i = 0; i < count; i++) {
+                      NSString *selName = NSStringFromSelector(method_getName(methods[i])).lowercaseString;
+                      if ([selName containsString:@"split"] || [selName containsString:@"cut"] || [selName containsString:@"divide"]) {
+                          [methodsToCall addObject:NSStringFromSelector(method_getName(methods[i]))];
+                      }
+                  }
+                  free(methods);
+                  
+                  // Gọi hàm với tham số thời gian (double)
+                  for (NSNumber *beat in beats) {
+                      double t = [beat doubleValue];
+                      for (NSString *selName in methodsToCall) {
+                          SEL sel = NSSelectorFromString(selName);
+                          NSMethodSignature *sig = [editor methodSignatureForSelector:sel];
+                          if (sig && sig.numberOfArguments == 3) {
+                              const char *argType = [sig getArgumentTypeAtIndex:2];
+                              if (strcmp(argType, @encode(double)) == 0) {
+                                  NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                                  [inv setTarget:editor];
+                                  [inv setSelector:sel];
+                                  [inv setArgument:&t atIndex:2];
+                                  [inv invoke];
+                              }
+                          }
+                      }
+                  }
+              } @catch (NSException *e) {}
+          }
+          @end
 
           // ==========================================
-          // PASSTHROUGH WINDOW
+          // PASSTHROUGH WINDOW & UI THEME
           // ==========================================
           @interface VSPassthroughWindow : UIWindow
           @end
@@ -73,26 +180,22 @@ jobs:
           }
           @end
 
-          // ==========================================
-          // UI THEME (STREETWEAR & NEON GREEN)
-          // ==========================================
           @interface VladUI : NSObject
           + (UIColor *)neonGreen;
           + (UIColor *)darkBg;
           + (UIColor *)cardBg;
-          + (UIImage *)iconWithName:(NSString *)name size:(CGFloat)size color:(UIColor *)color;
+          + (UIImage *)icon:(NSString *)name size:(CGFloat)size color:(UIColor *)color;
           @end
 
           @implementation VladUI
           + (UIColor *)neonGreen { return [UIColor colorWithRed:0.1 green:1.0 blue:0.2 alpha:1.0]; }
           + (UIColor *)darkBg { return [UIColor colorWithRed:0.05 green:0.05 blue:0.07 alpha:0.98]; }
           + (UIColor *)cardBg { return [UIColor colorWithRed:0.1 green:0.1 blue:0.12 alpha:0.9]; }
-          + (UIImage *)iconWithName:(NSString *)name size:(CGFloat)size color:(UIColor *)color {
+          + (UIImage *)icon:(NSString *)name size:(CGFloat)size color:(UIColor *)color {
               if (@available(iOS 13.0, *)) {
                   UIImage *img = [UIImage systemImageNamed:name];
                   UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:size weight:UIImageSymbolWeightBold];
-                  img = [img imageWithConfiguration:config];
-                  return [img imageWithTintColor:color renderingMode:UIImageRenderingModeAlwaysOriginal];
+                  return [[img imageWithConfiguration:config] imageWithTintColor:color renderingMode:UIImageRenderingModeAlwaysOriginal];
               }
               return nil;
           }
@@ -154,9 +257,7 @@ jobs:
                               const int hop = 512;
                               NSInteger frames = sampleCount / hop;
 
-                              if (frames < 16) {
-                                  err = [NSError errorWithDomain:@"Vlad" code:2 userInfo:@{NSLocalizedDescriptionKey:@"Audio quá ngắn"}];
-                              } else {
+                              if (frames > 16) {
                                   double *energy = (double *)malloc(frames * sizeof(double));
                                   for (NSInteger i = 0; i < frames; i++) {
                                       double e = 0;
@@ -174,30 +275,22 @@ jobs:
                                       onset[i] = (v > 0) ? v : 0;
                                   }
 
-                                  NSInteger searchMin = 14;
-                                  NSInteger searchMax = 86;
+                                  NSInteger searchMin = 14, searchMax = 86;
                                   if (searchMax >= frames) searchMax = frames - 1;
                                   NSInteger bestLag = 0;
                                   double bestScore = 0;
 
                                   for (NSInteger lag = searchMin; lag < searchMax; lag++) {
                                       double sum = 0;
-                                      for (NSInteger i = 0; i < frames - lag; i++) {
-                                          sum += onset[i] * onset[i+lag];
-                                      }
+                                      for (NSInteger i = 0; i < frames - lag; i++) sum += onset[i] * onset[i+lag];
                                       sum /= (frames - lag);
                                       if (lag >= 16 && lag <= 32) sum *= 1.2;
-                                      if (sum > bestScore) {
-                                          bestScore = sum;
-                                          bestLag = lag;
-                                      }
+                                      if (sum > bestScore) { bestScore = sum; bestLag = lag; }
                                   }
 
                                   if (bestLag > 0) {
                                       double fps = 22050.0 / hop;
-                                      double beatPeriodSec = bestLag / fps;
-                                      bpm = 60.0 / beatPeriodSec;
-
+                                      bpm = 60.0 / (bestLag / fps);
                                       double threshold = 0;
                                       for (NSInteger i = 0; i < frames; i++) threshold += onset[i];
                                       threshold /= frames;
@@ -206,20 +299,15 @@ jobs:
                                       NSMutableArray *list = [NSMutableArray array];
                                       for (NSInteger i = 1; i < frames - 1; i++) {
                                           if (onset[i] > threshold && onset[i] > onset[i-1] && onset[i] >= onset[i+1]) {
-                                              double t = (double)i * hop / 22050.0;
-                                              [list addObject:@(t)];
+                                              [list addObject:@((double)i * hop / 22050.0)];
                                           }
                                       }
                                       beats = list;
-                                      if (list.count == 0) {
-                                          err = [NSError errorWithDomain:@"Vlad" code:3 userInfo:@{NSLocalizedDescriptionKey:@"Không thấy nhịp"}];
-                                      }
+                                      if (list.count == 0) err = [NSError errorWithDomain:@"Vlad" code:3 userInfo:@{NSLocalizedDescriptionKey:@"Không thấy nhịp"}];
                                   } else {
                                       err = [NSError errorWithDomain:@"Vlad" code:4 userInfo:@{NSLocalizedDescriptionKey:@"Không tìm thấy tempo"}];
                                   }
-
-                                  free(energy);
-                                  free(onset);
+                                  free(energy); free(onset);
                               }
                           }
                       }
@@ -227,15 +315,13 @@ jobs:
                       err = [NSError errorWithDomain:@"Vlad" code:99 userInfo:@{NSLocalizedDescriptionKey: e.reason ?: @"Lỗi phân tích"}];
                   }
 
-                  dispatch_async(dispatch_get_main_queue(), ^{
-                      completion(bpm, beats, err);
-                  });
+                  dispatch_async(dispatch_get_main_queue(), ^{ completion(bpm, beats, err); });
               });
           }
           @end
 
           // ==========================================
-          // MENU VIEW
+          // UI CHÍNH
           // ==========================================
           @interface VladMenuView : UIView <PHPickerViewControllerDelegate, UIDocumentPickerDelegate>
           @property (nonatomic, strong) UIView *panel;
@@ -260,10 +346,7 @@ jobs:
           }
           - (void)setupUI {
               self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.7];
-              
-              // Tap out to close
-              UITapGestureRecognizer *bgTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(closeTapped)];
-              [self addGestureRecognizer:bgTap];
+              [self addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(closeTapped)]];
               
               CGFloat width = 320, height = 460;
               self.panel = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, height)];
@@ -276,9 +359,7 @@ jobs:
               self.panel.layer.shadowRadius = 12;
               self.panel.layer.shadowOpacity = 0.6;
               self.panel.layer.shadowOffset = CGSizeZero;
-              // Prevent tap inside panel from closing
-              UITapGestureRecognizer *panelTap = [[UITapGestureRecognizer alloc] initWithTarget:nil action:nil];
-              [self.panel addGestureRecognizer:panelTap];
+              [self.panel addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:nil action:nil]];
               [self addSubview:self.panel];
 
               UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(20, 25, width-40, 30)];
@@ -297,7 +378,7 @@ jobs:
 
               UIButton *close = [UIButton buttonWithType:UIButtonTypeCustom];
               close.frame = CGRectMake(width - 40, 20, 30, 30);
-              [close setImage:[VladUI iconWithName:@"xmark.circle.fill" size:22 color:[UIColor grayColor]] forState:UIControlStateNormal];
+              [close setImage:[VladUI icon:@"xmark.circle.fill" size:22 color:[UIColor grayColor]] forState:UIControlStateNormal];
               [close addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
               [self.panel addSubview:close];
 
@@ -337,7 +418,6 @@ jobs:
               sender.selected = YES;
               sender.backgroundColor = [VladUI neonGreen];
               [sender setTitleColor:[UIColor blackColor] forState:UIControlStateSelected];
-
               [self renderTab:sender.tag];
           }
 
@@ -355,7 +435,7 @@ jobs:
               }
               else if (index == 1) {
                   NSArray *titles = @[@"Xem Code Gần Nhất", @"Auto Nhập Hình Ảnh", @"Auto Chia Beat Nhạc"];
-                  NSArray *descs = @[@"Hiển thị ảnh mẫu vừa chọn", @"Nhập ảnh hàng loạt thông minh", @"Cắt phân cảnh theo nhịp nhạc"];
+                  NSArray *descs = @[@"Hiển thị ảnh mẫu vừa chọn", @"Tự động điền ảnh vào lớp", @"Cắt phân cảnh theo nhịp nhạc"];
                   NSArray *icons = @[@"qrcode.viewfinder", @"photo.on.rectangle.angled", @"waveform.path"];
                   
                   for (int i=0; i<3; i++) {
@@ -368,7 +448,7 @@ jobs:
                       btn.tag = i;
                       
                       UIImageView *iconView = [[UIImageView alloc] initWithFrame:CGRectMake(15, 25, 24, 24)];
-                      iconView.image = [VladUI iconWithName:icons[i] size:24 color:[VladUI neonGreen]];
+                      iconView.image = [VladUI icon:icons[i] size:24 color:[VladUI neonGreen]];
                       [btn addSubview:iconView];
                       
                       UILabel *tLbl = [[UILabel alloc] initWithFrame:CGRectMake(55, 18, btn.bounds.size.width-70, 22)];
@@ -407,9 +487,7 @@ jobs:
               }
               if (!keyWin) keyWin = [UIApplication sharedApplication].keyWindow;
               UIViewController *vc = keyWin.rootViewController;
-              while (vc.presentedViewController) {
-                  vc = vc.presentedViewController;
-              }
+              while (vc.presentedViewController) { vc = vc.presentedViewController; }
               return vc;
           }
 
@@ -447,14 +525,10 @@ jobs:
                   config.selectionLimit = 1;
                   PHPickerViewController *picker = [[PHPickerViewController alloc] initWithConfiguration:config];
                   picker.delegate = self;
-                  
                   [[self getPresentingVC] presentViewController:picker animated:YES completion:nil];
               } else if (sender.tag == 2) {
-                  if (gCurrentAudioURL) {
-                      [self analyzeAudio:gCurrentAudioURL];
-                  } else {
-                      [self pickAudioFile];
-                  }
+                  if (gCurrentAudioURL) [self analyzeAudio:gCurrentAudioURL];
+                  else [self pickAudioFile];
               }
           }
 
@@ -467,9 +541,7 @@ jobs:
           }
 
           - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
-              if (urls.count > 0) {
-                  [self analyzeAudio:urls.firstObject];
-              }
+              if (urls.count > 0) [self analyzeAudio:urls.firstObject];
           }
 
           - (void)analyzeAudio:(NSURL *)url {
@@ -486,7 +558,7 @@ jobs:
                       [self showAlert:@"Chia Beat Thành Công" msg:msg];
                       
                       if (gCurrentEditor) {
-                          autoSplitEditor(gCurrentEditor, beats);
+                          [VladRuntime splitEditor:gCurrentEditor withBeats:beats];
                       } else {
                           [self showAlert:@"Lỗi" msg:@"Hãy mở màn hình chia cảnh (Split Scene) trước khi bấm!"];
                       }
@@ -505,7 +577,7 @@ jobs:
                               gLastQRImage = (UIImage *)image;
                               dispatch_async(dispatch_get_main_queue(), ^{
                                   if (gCurrentEditor) {
-                                      autoFillSmart(gCurrentEditor);
+                                      [VladRuntime applyImage:gLastQRImage toEditor:gCurrentEditor];
                                       [self showAlert:@"Thành công" msg:@"Đã tự động nhập ảnh vào tất cả lớp hình ảnh!"];
                                   } else {
                                       [self showAlert:@"Lỗi" msg:@"Không tìm thấy màn hình Editor. Hãy mở Editor trước."];
@@ -551,7 +623,7 @@ jobs:
           @end
 
           // ==========================================
-          // LOGO OVERLAY
+          // LOGO VIEW
           // ==========================================
           @interface VladLogoView : UIView
           - (void)logoTapped;
@@ -577,10 +649,8 @@ jobs:
                   lbl.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:28];
                   [self addSubview:lbl];
                   
-                  UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(logoTapped)];
-                  [self addGestureRecognizer:tap];
-                  UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(logoPanned:)];
-                  [self addGestureRecognizer:pan];
+                  [self addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(logoTapped)]];
+                  [self addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(logoPanned:)]];
               }
               return self;
           }
@@ -628,94 +698,6 @@ jobs:
           }
           @end
 
-          // ==========================================
-          // XỬ LÝ CHỨC NĂNG (SIÊU THÔNG MINH)
-          // ==========================================
-          static void autoFillSmart(UIViewController *editor) {
-              if (!editor || !gLastQRImage) return;
-              @try {
-                  // 1. Cố gắng can thiệp qua Engine của Video Star
-                  BOOL appliedViaEngine = NO;
-                  SEL engineSel = NSSelectorFromString(@"engine");
-                  if ([editor respondsToSelector:engineSel]) {
-                      id engine = [editor performSelector:engineSel];
-                      SEL layersSel = NSSelectorFromString(@"layers");
-                      if ([engine respondsToSelector:layersSel]) {
-                          NSArray *layers = [engine performSelector:layersSel];
-                          for (id layer in layers) {
-                              // Nếu layer có hàm setImage và đang có ảnh
-                              if ([layer respondsToSelector:@selector(setImage:)]) {
-                                  @try {
-                                      [layer setValue:gLastQRImage forKey:@"image"];
-                                      appliedViaEngine = YES;
-                                  } @catch (NSException *e) {}
-                              }
-                          }
-                      }
-                  }
-                  
-                  // 2. Fallback: Quét view nếu không có Engine
-                  if (!appliedViaEngine) {
-                      NSMutableArray *imageViews = [NSMutableArray array];
-                      [self searchImageViews:editor.view array:imageViews]; // Dummy method signature to match recursion
-                      
-                      // Helper block for recursion
-                      __block void (^search)(UIView *);
-                      search = ^(UIView *parent) {
-                          for (UIView *sub in parent.subviews) {
-                              if ([sub isKindOfClass:[UIImageView class]]) {
-                                  [imageViews addObject:sub];
-                              }
-                              search(sub);
-                          }
-                      };
-                      search(editor.view);
-                      
-                      for (UIView *v in imageViews) {
-                          if (v.bounds.size.width > 60 && v.bounds.size.height > 60 && v.tag != 888) {
-                              if ([v isKindOfClass:[UIImageView class]]) {
-                                  UIImageView *iv = (UIImageView *)v;
-                                  if (iv.image != nil) { // Bỏ qua lớp trống
-                                      iv.image = gLastQRImage;
-                                  }
-                              }
-                          }
-                      }
-                  }
-              } @catch (NSException *e) {}
-          }
-
-          static void autoSplitEditor(UIViewController *editor, NSArray<NSNumber *> *beats) {
-              if (!editor || beats.count == 0) return;
-              @try {
-                  unsigned int count;
-                  Method *methods = class_copyMethodList([editor class], &count);
-                  SEL splitSel = NULL;
-                  for (int i = 0; i < count; i++) {
-                      NSString *selName = NSStringFromSelector(method_getName(methods[i])).lowercaseString;
-                      if ([selName containsString:@"split"] || [selName containsString:@"divide"] || [selName containsString:@"cut"]) {
-                          splitSel = method_getName(methods[i]);
-                          break;
-                      }
-                  }
-                  free(methods);
-                  
-                  if (splitSel) {
-                      NSMethodSignature *sig = [editor methodSignatureForSelector:splitSel];
-                      if (sig && sig.numberOfArguments > 2) {
-                          NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-                          [inv setTarget:editor];
-                          [inv setSelector:splitSel];
-                          for (NSNumber *beat in beats) {
-                              double t = [beat doubleValue];
-                              [inv setArgument:&t atIndex:2];
-                              [inv invoke];
-                          }
-                      }
-                  }
-              } @catch (NSException *e) {}
-          }
-
           __attribute__((constructor))
           static void initVlad() {
               @autoreleasepool {
@@ -749,18 +731,11 @@ jobs:
           set -o pipefail
           make clean || true
           make -j1 VERBOSE=1 2>&1 | tee build.log
-          
-          echo "=== Xử lý Dylib ==="
           DYLIB_PATH=$(find .theos/obj -name "VladAuto.dylib" -type f | head -n 1)
-          echo "Tìm thấy: $DYLIB_PATH"
-          
           mkdir -p output
           cp "$DYLIB_PATH" output/vlad.dylib
-          
           install_name_tool -id "@rpath/vlad.dylib" output/vlad.dylib
           ldid -S output/vlad.dylib
-          
-          echo "=== build xong ==="
 
       - name: Upload Vlad Dylib
         uses: actions/upload-artifact@v4
