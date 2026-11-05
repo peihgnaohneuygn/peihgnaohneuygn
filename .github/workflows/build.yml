@@ -468,12 +468,12 @@ jobs:
                   [gCurrentPlayer removeTimeObserver:gTimeObserver];
                   gTimeObserver = nil;
               }
-              NSArray *beats = gDetectedBeats;
+              NSArray<NSNumber *> *beats = gDetectedBeats;
               __block NSInteger lastIdx = -1;
               gTimeObserver = [gCurrentPlayer addPeriodicTimeObserverForInterval:CMTimeMake(1, 30) queue:dispatch_get_main_queue() usingBlock:^(CMTime time) {
                   double t = CMTimeGetSeconds(time);
                   for (NSInteger i = 0; i < (NSInteger)beats.count; i++) {
-                      double bt = beats[i].doubleValue;
+                      double bt = [beats[i] doubleValue];
                       if (bt > t - 0.05 && bt <= t + 0.05 && i != lastIdx) {
                           lastIdx = i;
                           UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
