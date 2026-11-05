@@ -17,27 +17,28 @@ jobs:
           echo "THEOS=$HOME/theos" >> $GITHUB_ENV
           echo "$HOME/theos/bin" >> $GITHUB_PATH
 
-      - name: Download iOS SDK 16.4
+      - name: Download iOS SDK 16.5
         run: |
           set -e
           mkdir -p $THEOS/sdks
           git clone --depth 1 https://github.com/theos/sdks.git /tmp/sdks
-          cp -R /tmp/sdks/iPhoneOS16.4.sdk $THEOS/sdks/
+          # Lấy SDK 16.5 (đã được cập nhật thay cho 16.4)
+          cp -R /tmp/sdks/iPhoneOS16.5.sdk $THEOS/sdks/
           ls -la $THEOS/sdks/
 
       - name: Create Makefile & Tweak.mm
         run: |
           cat > Makefile << 'MAKEEOF'
           ARCHS = arm64 arm64e
-          TARGET = iphone:clang:16.4:14.0
+          TARGET = iphone:clang:16.5:14.0
           include $(THEOS)/makefiles/common.mk
 
           LIBRARY_NAME = VladAuto
           VladAuto_FILES = Tweak.mm
           VladAuto_FRAMEWORKS = UIKit Foundation AVFoundation Photos PhotosUI QuartzCore CoreMedia AudioToolbox UniformTypeIdentifiers
           
-          VladAuto_CFLAGS  = -fobjc-arc -w -stdlib=libc++ -I$(THEOS)/sdks/iPhoneOS16.4.sdk/usr/include/c++/v1
-          VladAuto_CCFLAGS = -fobjc-arc -w -std=c++17 -stdlib=libc++ -I$(THEOS)/sdks/iPhoneOS16.4.sdk/usr/include/c++/v1
+          VladAuto_CFLAGS  = -fobjc-arc -w -stdlib=libc++ -I$(THEOS)/sdks/iPhoneOS16.5.sdk/usr/include/c++/v1
+          VladAuto_CCFLAGS = -fobjc-arc -w -std=c++17 -stdlib=libc++ -I$(THEOS)/sdks/iPhoneOS16.5.sdk/usr/include/c++/v1
           VladAuto_USE_MODULES = 0
           VladAuto_LDFLAGS = -stdlib=libc++
 
@@ -244,7 +245,6 @@ jobs:
                       if (MeterClass && [MeterClass respondsToSelector:@selector(sharedInstance)])
                           meter = ((id (*)(id, SEL))objc_msgSend)(MeterClass, @selector(sharedInstance));
 
-                      // Cách 1: BPM có sẵn trong project
                       if (songBPM > 0 && songFBT >= 0 && songDuration > 0 && meter) {
                           SEL sel = NSSelectorFromString(@"beatFrameOffsetsForBPM:firstBeatTime:duration:startOffset:");
                           if ([meter respondsToSelector:sel]) {
@@ -255,7 +255,6 @@ jobs:
                           }
                       }
 
-                      // Cách 2: Hỏi MeterAndBPMModel theo scene
                       if (!times && meter) {
                           SEL sel = NSSelectorFromString(@"beatFrameOffsetsForScene:project:");
                           if ([meter respondsToSelector:sel]) {
@@ -265,7 +264,6 @@ jobs:
                           }
                       }
 
-                      // Cách 3: CLASS method cho audio analysis
                       if (!times && meter) {
                           NSURL *audioURL = nil;
                           @try {
