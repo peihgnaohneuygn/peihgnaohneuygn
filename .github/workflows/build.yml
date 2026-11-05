@@ -38,7 +38,8 @@ jobs:
           VladAuto_CFLAGS  = -fobjc-arc -w -stdlib=libc++ -I$(THEOS)/sdks/iPhoneOS16.5.sdk/usr/include/c++/v1
           VladAuto_CCFLAGS = -fobjc-arc -w -std=c++17 -stdlib=libc++ -I$(THEOS)/sdks/iPhoneOS16.5.sdk/usr/include/c++/v1
           VladAuto_USE_MODULES = 0
-          VladAuto_LDFLAGS = -stdlib=libc++
+          # FIX LỖI LINKER: Cho phép tìm class động lúc runtime
+          VladAuto_LDFLAGS = -stdlib=libc++ -Wl,-undefined,dynamic_lookup
 
           include $(THEOS_MAKE_PATH)/library.mk
           MAKEEOF
@@ -52,7 +53,7 @@ jobs:
           #import <objc/runtime.h>
           #import <objc/message.h>
 
-          // ═══════════ KHAI BÁO CLASS GỐC (BẮT BUỘC ĐỂ HẾT LỖI) ═══════════
+          // ═══════════ KHAI BÁO CLASS GỐC (BẮT BUỘC) ═══════════
           @interface QRCodeManager : NSObject
           @end
 
@@ -521,7 +522,7 @@ jobs:
           }
           @end
 
-          // ═══════════ HOOKS (ĐÃ FIX KHAI BÁO) ═══════════
+          // ═══════════ HOOKS ═══════════
           @interface UIViewController (VladHook)
           - (void)vlad_viewDidLoad;
           @end
