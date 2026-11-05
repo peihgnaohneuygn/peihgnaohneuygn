@@ -18,7 +18,6 @@ jobs:
           mkdir -p $THEOS/sdks
           git clone --depth 1 https://github.com/theos/sdks.git /tmp/sdks
           cp -R /tmp/sdks/iPhoneOS14.5.sdk $THEOS/sdks/
-          echo "=== SDK đã cài ==="
 
       - name: Setup Tools (ldid & dpkg)
         run: |
@@ -30,23 +29,12 @@ jobs:
           ARCHS = arm64 arm64e
           TARGET = iphone:clang:latest:14.0
           include $(THEOS)/makefiles/common.mk
-          TWEAK_NAME = VladAuto
+          LIBRARY_NAME = VladAuto
           VladAuto_FILES = Tweak.mm
           VladAuto_FRAMEWORKS = UIKit Foundation AVFoundation Photos PhotosUI QuartzCore CoreMedia AudioToolbox
           VladAuto_CFLAGS = -fobjc-arc -Wno-everything -std=c++17
           VladAuto_CCFLAGS = -std=c++17
-          include $(THEOS_MAKE_PATH)/tweak.mk
-          EOF
-
-          cat << 'EOF' > control
-          Package: com.vlad.limited
-          Name: Sống Bằng Tình Cảm
-          Version: 5.0.0
-          Architecture: iphoneos-arm
-          Description: Vlad Limited Edition - Video Star Tool
-          Maintainer: Vlad
-          Author: Vlad
-          Section: Tweaks
+          include $(THEOS_MAKE_PATH)/library.mk
           EOF
 
           cat << 'TWEAKEOF' > Tweak.mm
@@ -536,10 +524,6 @@ jobs:
           }
           @end
 
-          // ==========================================
-          // SWIZZLING VIA OBJC RUNTIME (NO SUBSTRATE NEEDED)
-          // ==========================================
-
           @interface PHPickerViewController (VladHook)
           - (void)vlad_picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results;
           @end
@@ -673,31 +657,27 @@ jobs:
           make clean || true
           make -j1 VERBOSE=1 2>&1 | tee build.log
           
-          echo "=== Đóng gói file Dylib ==="
+          echo "=== Xử lý Dylib ==="
           DYLIB_PATH=$(find .theos/obj -name "VladAuto.dylib" -type f | head -n 1)
           echo "Tìm thấy: $DYLIB_PATH"
           
           mkdir -p output
           cp "$DYLIB_PATH" output/vlad.dylib
           
-          cd output
-          zip -r vlad.zip vlad.dylib
-          cd ..
+          # Đổi ID để iOS 17 không chặn
+          install_name_tool -id "@rpath/vlad.dylib" output/vlad.dylib
+          
+          # Ký ad-hoc chuẩn chỉnh
+          ldid -S output/vlad.dylib
+          
           echo "=== build xong ==="
 
-      - name: Upload Vlad Zip
+      - name: Upload Vlad Dylib
         uses: actions/upload-artifact@v4
         with:
-          name: vlad-zip
-          path: output/vlad.zip
+          name: vlad.dylib
+          path: output/vlad.dylib
           if-no-files-found: error
-
-      - name: Upload Deb
-        uses: actions/upload-artifact@v4
-        with:
-          name: VladTool-deb
-          path: packages/*.deb
-          if-no-files-found: warn
 
       - name: Upload build log nếu fail
         if: failure()
