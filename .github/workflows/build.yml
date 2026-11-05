@@ -36,7 +36,8 @@ jobs:
           TWEAK_NAME = VladAuto
           VladAuto_FILES = Tweak.xm
           VladAuto_FRAMEWORKS = UIKit Foundation AVFoundation Photos PhotosUI QuartzCore CoreMedia AudioToolbox
-          VladAuto_CFLAGS = -fobjc-arc -Wno-everything
+          VladAuto_CFLAGS = -fobjc-arc -Wno-everything -std=c++17
+          VladAuto_CCFLAGS = -std=c++17
           include $(THEOS_MAKE_PATH)/tweak.mk
           EOF
 
