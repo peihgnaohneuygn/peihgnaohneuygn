@@ -10,6 +10,7 @@ jobs:
         run: |
           export THEOS=$HOME/theos
           git clone --depth 1 https://github.com/theos/theos.git $THEOS
+          $THEOS/bin/update-theos
           echo "THEOS=$THEOS" >> $GITHUB_ENV
 
       - name: Tải SDK
@@ -22,11 +23,8 @@ jobs:
 
       - name: Setup ldid + dpkg
         run: |
-          # fake ldid — bỏ qua ký, dylib vẫn load được trên jailbreak
           printf '#!/bin/sh\nexit 0\n' | sudo tee /usr/local/bin/ldid > /dev/null
           sudo chmod +x /usr/local/bin/ldid
-
-          # dpkg-deb cho bước make package
           brew install dpkg
 
       - name: Tạo Build Files
